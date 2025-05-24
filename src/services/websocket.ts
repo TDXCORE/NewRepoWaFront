@@ -21,6 +21,9 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   agent_enabled?: boolean;
+  // Propiedades adicionales que puede enviar el backend corregido
+  users?: User;
+  user?: User;
 }
 
 export interface Message {
@@ -317,21 +320,85 @@ class WebSocketService {
     return this.send('users', 'get_all_users');
   }
 
-  // API de Conversaciones - Versión simplificada
+  // API de Conversaciones - Corregida para incluir agent_enabled requerido
   async getConversations(userId?: string): Promise<{ conversations: Conversation[] }> {
     try {
-      // Usar get_user_conversations que está mapeado a get_conversations_by_agent_status
-      console.log('🔍 Obteniendo todas las conversaciones...');
-      return this.send('conversations', 'get_user_conversations', { agent_enabled: true });
+      console.log('🔍 Obteniendo conversaciones con parámetro agent_enabled...');
+      
+      // El backend requiere el parámetro agent_enabled, obtener ambos tipos
+      const [enabledConversations, disabledConversations] = await Promise.allSettled([
+        this.send('conversations', 'get_user_conversations', { agent_enabled: true }),
+        this.send('conversations', 'get_user_conversations', { agent_enabled: false })
+      ]);
+      
+      let allConversations: Conversation[] = [];
+      
+      // Procesar conversaciones con agente habilitado
+      if (enabledConversations.status === 'fulfilled') {
+        const enabled = enabledConversations.value.conversations || [];
+        console.log(`✅ Conversaciones con agente habilitado: ${enabled.length}`);
+        allConversations.push(...enabled);
+      } else {
+        console.error('❌ Error obteniendo conversaciones con agente habilitado:', enabledConversations.reason);
+      }
+      
+      // Procesar conversaciones con agente deshabilitado
+      if (disabledConversations.status === 'fulfilled') {
+        const disabled = disabledConversations.value.conversations || [];
+        console.log(`✅ Conversaciones con agente deshabilitado: ${disabled.length}`);
+        allConversations.push(...disabled);
+      } else {
+        console.error('❌ Error obteniendo conversaciones con agente deshabilitado:', disabledConversations.reason);
+      }
+      
+      console.log(`✅ Total conversaciones obtenidas: ${allConversations.length}`);
+      
+      // Buscar específicamente la conversación mencionada por el usuario
+      const targetConversationId = '5db5791a-c545-48e2-a062-ea4ece5917c4';
+      const targetConversation = allConversations.find((conv: Conversation) => conv.id === targetConversationId);
+      
+      if (targetConversation) {
+        console.log(`🎯 ¡ENCONTRADA! Conversación objetivo ${targetConversationId}:`, targetConversation);
+      } else {
+        console.log(`❌ NO ENCONTRADA: Conversación objetivo ${targetConversationId} no está en los resultados`);
+        console.log('🔍 IDs de conversaciones disponibles:', allConversations.map((c: Conversation) => c.id));
+      }
+      
+      return { conversations: allConversations };
     } catch (error) {
       console.error('❌ Error obteniendo conversaciones:', error);
       return { conversations: [] };
     }
   }
 
-  // API de Mensajes
-  async getMessages(conversationId: string): Promise<{ messages: Message[] }> {
-    return this.send('messages', 'get_conversation_messages', { conversation_id: conversationId });
+  // API de Mensajes - Mejorada para obtener todos los mensajes
+  async getMessages(conversationId: string, limit: number = 1000, offset: number = 0): Promise<{ messages: Message[] }> {
+    try {
+      console.log(`🔍 Obteniendo mensajes para conversación ${conversationId} (limit: ${limit}, offset: ${offset})`);
+      
+      const response = await this.send('messages', 'get_conversation_messages', { 
+        conversation_id: conversationId,
+        limit,
+        offset
+      });
+      
+      const messages = response.messages || [];
+      console.log(`✅ Mensajes obtenidos: ${messages.length}`);
+      
+      if (response.pagination) {
+        console.log(`📊 Paginación: ${response.pagination.offset}/${response.pagination.total} (limit: ${response.pagination.limit})`);
+        
+        // Si hay más mensajes disponibles, advertir
+        if (response.pagination.total > messages.length) {
+          console.log(`⚠️ ADVERTENCIA: Hay ${response.pagination.total - messages.length} mensajes adicionales disponibles`);
+        }
+      }
+      
+      return { messages };
+    } catch (error) {
+      console.error(`❌ Error obteniendo mensajes para conversación ${conversationId}:`, error);
+      return { messages: [] };
+    }
   }
 
   async sendMessage(conversationId: string, content: string, role: 'user' | 'assistant' = 'user'): Promise<{ message: Message }> {

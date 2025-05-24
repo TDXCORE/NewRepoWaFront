@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import MainLayout from '../components/Layout/MainLayout';
 import { useWebSocket } from '../contexts/WebSocketContext';
-import { FiSend, FiUser, FiMessageCircle, FiSearch, FiFilter, FiX, FiCpu, FiArchive, FiInfo } from 'react-icons/fi';
+import { FiSend, FiUser, FiMessageCircle, FiSearch, FiFilter, FiX, FiCpu, FiArchive, FiInfo, FiRefreshCw } from 'react-icons/fi';
 import { format, formatDistanceToNow } from 'date-fns';
 import { es } from 'date-fns/locale';
 import clsx from 'clsx';
@@ -45,7 +45,81 @@ const ChatsPage: React.FC = () => {
   useEffect(() => {
     if (!ws || !isConnected) return;
     loadConversations();
-  }, [ws, isConnected]);
+    
+    // Configurar listeners para eventos en tiempo real
+    console.log('🎧 Configurando listeners de eventos en tiempo real...');
+    
+    // Listener genérico para capturar TODOS los eventos
+    const unsubscribeAllEvents = ws.on('*', (data: any) => {
+      console.log('🌐 EVENTO GENÉRICO RECIBIDO:', data);
+    });
+    
+    const unsubscribeNewMessage = ws.on('new_message', (data: any) => {
+      console.log('🔔 EVENTO: Nuevo mensaje recibido:', data);
+      console.log('🔍 Conversación seleccionada actual:', selectedConversation?.id);
+      console.log('🔍 ID de conversación del mensaje:', data.conversation_id);
+      
+      // Si el mensaje es para la conversación actualmente seleccionada, agregarlo
+      if (selectedConversation && data.conversation_id === selectedConversation.id) {
+        console.log('✅ Agregando mensaje a la conversación activa');
+        setMessages(prev => {
+          const newMessages = [...prev, data.message];
+          console.log(`📨 Total mensajes después de agregar: ${newMessages.length}`);
+          return newMessages;
+        });
+      } else {
+        console.log('ℹ️ Mensaje no es para la conversación activa, solo actualizando contador');
+      }
+      
+      // Actualizar el contador de mensajes no leídos para la conversación
+      setConversations(prev => prev.map(conv => {
+        if (conv.id === data.conversation_id) {
+          // Solo incrementar si no es la conversación actualmente seleccionada
+          const shouldIncrement = !selectedConversation || selectedConversation.id !== data.conversation_id;
+          console.log(`📊 Actualizando contador para conversación ${conv.id}, incrementar: ${shouldIncrement}`);
+          return {
+            ...conv,
+            unreadCount: shouldIncrement ? (conv.unreadCount || 0) + 1 : conv.unreadCount,
+            updated_at: data.message.created_at || new Date().toISOString()
+          };
+        }
+        return conv;
+      }));
+    });
+    
+    const unsubscribeMessageUpdated = ws.on('message_updated', (data: any) => {
+      console.log('📝 Mensaje actualizado:', data);
+      
+      // Si es para la conversación actualmente seleccionada, actualizar el mensaje
+      if (selectedConversation && data.conversation_id === selectedConversation.id) {
+        setMessages(prev => prev.map(msg => 
+          msg.id === data.message_id ? { ...msg, ...data.message } : msg
+        ));
+      }
+    });
+    
+    const unsubscribeMessagesRead = ws.on('messages_read', (data: any) => {
+      console.log('👁️ Mensajes marcados como leídos:', data);
+      
+      // Actualizar contador de no leídos
+      setConversations(prev => prev.map(conv => 
+        conv.id === data.conversation_id ? { ...conv, unreadCount: 0 } : conv
+      ));
+      
+      // Si es la conversación actualmente seleccionada, marcar mensajes como leídos
+      if (selectedConversation && data.conversation_id === selectedConversation.id) {
+        setMessages(prev => prev.map(msg => ({ ...msg, read: true })));
+      }
+    });
+    
+    // Cleanup function
+    return () => {
+      unsubscribeAllEvents();
+      unsubscribeNewMessage();
+      unsubscribeMessageUpdated();
+      unsubscribeMessagesRead();
+    };
+  }, [ws, isConnected, selectedConversation]);
 
   // Función para crear conversaciones virtuales para usuarios sin conversaciones
   const createRecoveredConversations = async (usersWithoutConversations: User[]): Promise<EnrichedConversation[]> => {
@@ -133,12 +207,18 @@ const ChatsPage: React.FC = () => {
       console.log(`💬 Conversaciones obtenidas: ${conversationsData.conversations?.length || 0}`);
 
       // Enriquecer conversaciones con datos de usuario
-      const enrichedConversations: EnrichedConversation[] = (conversationsData.conversations || []).map(conversation => ({
-        ...conversation,
-        user: usersMap.get(conversation.user_id),
-        isRecovered: false,
-        unreadCount: 0 // Inicializar en 0, se cargará en background
-      }));
+      const enrichedConversations: EnrichedConversation[] = (conversationsData.conversations || []).map(conversation => {
+        // El backend corregido ahora envía datos de usuario en el campo 'users' o 'user'
+        // Priorizar datos del backend si están disponibles, sino usar el mapa local
+        const userData = conversation.users || conversation.user || usersMap.get(conversation.user_id);
+        
+        return {
+          ...conversation,
+          user: userData,
+          isRecovered: false,
+          unreadCount: 0 // Inicializar en 0, se cargará en background
+        };
+      });
 
       // Ordenar por fecha de actualización (más recientes primero)
       const sortedConversations = enrichedConversations.sort((a, b) => {
@@ -220,6 +300,11 @@ const ChatsPage: React.FC = () => {
   const loadMessages = async (conversation: EnrichedConversation) => {
     if (!ws) return;
     try {
+      console.log(`🔍 DIAGNÓSTICO: Cargando mensajes para conversación ${conversation.id}`);
+      console.log(`👤 Usuario: ${conversation.user?.full_name}`);
+      console.log(`📱 Plataforma: ${conversation.platform}`);
+      console.log(`🔄 Es recuperada: ${conversation.isRecovered}`);
+      
       let messagesToShow: Message[] = [];
       
       if (conversation.isRecovered) {
@@ -228,11 +313,25 @@ const ChatsPage: React.FC = () => {
         console.log(`📨 Cargando ${messagesToShow.length} mensajes de conversación recuperada: ${conversation.user?.full_name}`);
       } else {
         // Para conversaciones normales, cargar desde el servidor
+        console.log(`🌐 Solicitando mensajes al servidor para conversación ${conversation.id}...`);
         const messagesData = await ws.getMessages(conversation.id);
         messagesToShow = messagesData.messages || [];
-        console.log(`📨 Cargando ${messagesToShow.length} mensajes de conversación normal: ${conversation.user?.full_name}`);
+        console.log(`📨 Respuesta del servidor: ${messagesToShow.length} mensajes`);
+        
+        // Mostrar detalles de los mensajes para diagnóstico
+        if (messagesToShow.length > 0) {
+          console.log(`📋 Últimos 3 mensajes:`, messagesToShow.slice(-3).map(msg => ({
+            id: msg.id,
+            content: msg.content.substring(0, 50) + '...',
+            role: msg.role,
+            created_at: msg.created_at
+          })));
+        } else {
+          console.log(`⚠️ No se obtuvieron mensajes del servidor`);
+        }
       }
       
+      console.log(`✅ Estableciendo ${messagesToShow.length} mensajes en el estado`);
       setMessages(messagesToShow);
       setSelectedConversation(conversation);
       
@@ -247,7 +346,7 @@ const ChatsPage: React.FC = () => {
       }
       
     } catch (error) {
-      console.error('Error cargando mensajes:', error);
+      console.error('❌ Error cargando mensajes:', error);
     }
   };
 
@@ -487,15 +586,24 @@ const ChatsPage: React.FC = () => {
             <div className="p-4 border-b border-gray-200">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-medium text-gray-900">Conversaciones</h2>
-                <button
-                  onClick={() => setShowFilters(!showFilters)}
-                  className={clsx(
-                    'p-2 rounded-md transition-colors',
-                    showFilters ? 'bg-indigo-100 text-indigo-600' : 'text-gray-400 hover:text-gray-600'
-                  )}
-                >
-                  <FiFilter className="h-4 w-4" />
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={loadConversations}
+                    className="p-2 rounded-md text-gray-400 hover:text-gray-600 transition-colors"
+                    title="Refrescar conversaciones"
+                  >
+                    <FiRefreshCw className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setShowFilters(!showFilters)}
+                    className={clsx(
+                      'p-2 rounded-md transition-colors',
+                      showFilters ? 'bg-indigo-100 text-indigo-600' : 'text-gray-400 hover:text-gray-600'
+                    )}
+                  >
+                    <FiFilter className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
               <p className="text-sm text-gray-500 mt-1">
                 {filteredConversations.length} de {conversations.length} conversaciones
@@ -732,6 +840,18 @@ const ChatsPage: React.FC = () => {
                           {selectedConversation.agent_enabled ? 'IA Activa' : 'IA Inactiva'}
                         </button>
                       )}
+                      
+                      {/* Botón refrescar mensajes */}
+                      <button
+                        onClick={() => {
+                          console.log('🔄 Refrescando mensajes manualmente...');
+                          loadMessages(selectedConversation);
+                        }}
+                        className="p-2 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100"
+                        title="Refrescar mensajes"
+                      >
+                        <FiRefreshCw className="h-4 w-4" />
+                      </button>
                       
                       {/* Botón de información */}
                       <button
