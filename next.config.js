@@ -2,6 +2,8 @@
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
+  output: 'export',
+  trailingSlash: true,
   
   env: {
     NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws',
@@ -9,17 +11,19 @@ const nextConfig = {
   },
   
   images: {
+    unoptimized: true,
     domains: ['localhost'],
   },
   
-  async rewrites() {
-    return [
-      {
-        source: '/api/ws/:path*',
-        destination: 'http://localhost:8000/:path*',
-      },
-    ]
-  },
+  // Rewrites no son compatibles con export estático
+  // async rewrites() {
+  //   return [
+  //     {
+  //       source: '/api/ws/:path*',
+  //       destination: 'http://localhost:8000/:path*',
+  //     },
+  //   ]
+  // },
 }
 
 module.exports = nextConfig
