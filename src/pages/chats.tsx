@@ -2,7 +2,8 @@ import React, { useEffect, useState, useMemo } from 'react';
 import MainLayout from '../components/Layout/MainLayout';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { FiSend, FiUser, FiMessageCircle, FiSearch, FiFilter, FiX } from 'react-icons/fi';
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
+import { es } from 'date-fns/locale';
 import clsx from 'clsx';
 import type { Conversation, Message, User } from '../services/websocket';
 
@@ -118,84 +119,103 @@ const ChatsPage: React.FC = () => {
     
     try {
       setLoading(true);
-      console.log('🔄 Cargando conversaciones...');
+      console.log('🚀 Carga rápida de conversaciones iniciada...');
       
-      // Cargar usuarios y conversaciones en paralelo para mejor rendimiento
+      // Cargar usuarios y conversaciones en paralelo
       const [conversationsData, usersData] = await Promise.all([
         ws.getConversations(),
         ws.getUsers()
       ]);
       
-      console.log(`💬 TODAS las conversaciones obtenidas: ${conversationsData.conversations?.length || 0}`);
-      console.log(`👥 TODOS los usuarios obtenidos: ${usersData.users?.length || 0}`);
+      console.log(`💬 Conversaciones obtenidas: ${conversationsData.conversations?.length || 0}`);
+      console.log(`👥 Usuarios obtenidos: ${usersData.users?.length || 0}`);
 
-      // Enriquecer conversaciones normales
-      const enrichedConversations: EnrichedConversation[] = (conversationsData.conversations || []).map(conversation => {
-        const user = (usersData.users || []).find(u => u.id === conversation.user_id);
-        return { ...conversation, user, isRecovered: false };
+      // Crear mapa de usuarios para búsqueda rápida
+      const usersMap = new Map((usersData.users || []).map(user => [user.id, user]));
+
+      // Enriquecer conversaciones con datos de usuario
+      const enrichedConversations: EnrichedConversation[] = (conversationsData.conversations || []).map(conversation => ({
+        ...conversation,
+        user: usersMap.get(conversation.user_id),
+        isRecovered: false,
+        unreadCount: 0 // Inicializar en 0, se cargará en background
+      }));
+
+      // Ordenar por fecha de actualización (más recientes primero)
+      const sortedConversations = enrichedConversations.sort((a, b) => {
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
       });
+      
+      console.log(`✅ Conversaciones cargadas y ordenadas: ${sortedConversations.length}`);
+      setConversations(sortedConversations);
+      
+      // Cargar contadores de mensajes no leídos en background (sin bloquear la UI)
+      loadUnreadCountsInBackground(sortedConversations);
+      
+      setLoadingStats({
+        usersTotal: usersData.users?.length || 0,
+        conversationsTotal: enrichedConversations.length,
+        usersWithoutConversations: 0
+      });
+      
+    } catch (error) {
+      console.error('❌ Error cargando conversaciones:', error);
+      setConversations([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      console.log(`✅ Conversaciones normales enriquecidas: ${enrichedConversations.length}`);
+  // Función para cargar contadores de mensajes no leídos en background
+  const loadUnreadCountsInBackground = async (conversations: EnrichedConversation[]) => {
+    console.log('🔄 Cargando contadores de mensajes no leídos en background...');
+    
+    // Procesar en lotes pequeños para no sobrecargar
+    const batchSize = 3;
+    for (let i = 0; i < conversations.length; i += batchSize) {
+      const batch = conversations.slice(i, i + batchSize);
       
-      // Diagnóstico: Calcular estadísticas de carga
-      const usersWithConversations = new Set(enrichedConversations.map(conv => conv.user_id));
-      const usersWithoutConversations = (usersData.users || []).filter(user => !usersWithConversations.has(user.id));
+      // Procesar lote en paralelo
+      const batchPromises = batch.map(async (conversation) => {
+        try {
+          const unreadCount = await getUnreadCount(conversation.id);
+          return { id: conversation.id, unreadCount };
+        } catch (error) {
+          console.error(`Error obteniendo unreadCount para ${conversation.id}:`, error);
+          return { id: conversation.id, unreadCount: 0 };
+        }
+      });
       
-      // Crear conversaciones virtuales para usuarios sin conversaciones
-      let recoveredConversations: EnrichedConversation[] = [];
-      if (usersWithoutConversations.length > 0) {
-        console.warn(`⚠️ DIAGNÓSTICO: ${usersWithoutConversations.length} usuarios sin conversaciones detectados:`);
-        usersWithoutConversations.forEach(user => {
-          console.warn(`   - ${user.full_name} (ID: ${user.id})`);
-        });
-        
-        recoveredConversations = await createRecoveredConversations(usersWithoutConversations);
-        setShowDiagnostic(true);
-      }
+      const batchResults = await Promise.allSettled(batchPromises);
       
-      // Combinar conversaciones normales y recuperadas
-      const allConversations = [...enrichedConversations, ...recoveredConversations];
+      // Actualizar estado con los resultados del lote
+      setConversations(prev => prev.map(conv => {
+        const result = batchResults.find(r => 
+          r.status === 'fulfilled' && r.value.id === conv.id
+        );
+        if (result && result.status === 'fulfilled') {
+          return { ...conv, unreadCount: result.value.unreadCount };
+        }
+        return conv;
+      }));
       
-      // Cargar contadores de mensajes no leídos para conversaciones normales
-      console.log('🔄 Cargando contadores de mensajes no leídos...');
-      const conversationsWithUnreadCounts = await Promise.all(
-        allConversations.map(async (conversation) => {
-          if (conversation.isRecovered) {
-            // Ya tenemos el unreadCount para conversaciones recuperadas
-            return conversation;
-          } else {
-            // Cargar unreadCount para conversaciones normales
-            const unreadCount = await getUnreadCount(conversation.id);
-            return { ...conversation, unreadCount };
-          }
-        })
-      );
-      
-      // Ordenar conversaciones: primero las que tienen mensajes no leídos, luego por fecha
-      const sortedConversations = conversationsWithUnreadCounts.sort((a, b) => {
+      // Reordenar después de cada lote para mostrar conversaciones con mensajes no leídos primero
+      setConversations(prev => [...prev].sort((a, b) => {
         // Primero por mensajes no leídos (descendente)
         if ((a.unreadCount || 0) !== (b.unreadCount || 0)) {
           return (b.unreadCount || 0) - (a.unreadCount || 0);
         }
         // Luego por fecha de actualización (descendente)
         return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-      });
+      }));
       
-      setLoadingStats({
-        usersTotal: usersData.users?.length || 0,
-        conversationsTotal: enrichedConversations.length,
-        usersWithoutConversations: usersWithoutConversations.length - recoveredConversations.length
-      });
-      
-      console.log(`✅ TOTAL FINAL: ${sortedConversations.length} conversaciones (${enrichedConversations.length} normales + ${recoveredConversations.length} recuperadas)`);
-      setConversations(sortedConversations);
-      
-    } catch (error) {
-      console.error('❌ Error cargando conversaciones:', error);
-      setConversations([]); // Establecer array vacío en caso de error
-    } finally {
-      setLoading(false);
+      // Pausa pequeña entre lotes para no sobrecargar
+      if (i + batchSize < conversations.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
+    
+    console.log('✅ Contadores de mensajes no leídos cargados completamente');
   };
 
   const loadMessages = async (conversation: EnrichedConversation) => {
@@ -585,6 +605,13 @@ const ChatsPage: React.FC = () => {
                               {conversation.platform}
                             </span>
                           </div>
+                          {/* Timestamp relativo */}
+                          <p className="text-xs text-gray-400 mt-1">
+                            {formatDistanceToNow(new Date(conversation.updated_at), { 
+                              addSuffix: true, 
+                              locale: es 
+                            })}
+                          </p>
                         </div>
                       </div>
                     </div>
