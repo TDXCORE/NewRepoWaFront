@@ -52,21 +52,38 @@ class WebSocketService {
     onError: () => {}
   };
 
-  constructor(private token?: string) {}
+  constructor(private token?: string) {
+    console.log('🔍 DEBUG - WebSocketService constructor');
+    console.log('🔍 DEBUG - Token recibido:', token ? `${token.substring(0, 20)}...` : 'undefined');
+  }
 
   private getDefaultWebSocketUrl(): string {
+    console.log('🔍 DEBUG - Obteniendo URL de WebSocket...');
+    console.log('🔍 DEBUG - process.env.NEXT_PUBLIC_WS_URL:', process.env.NEXT_PUBLIC_WS_URL);
+    console.log('🔍 DEBUG - typeof window:', typeof window);
+    
     // Usar la URL del entorno si está disponible
     if (process.env.NEXT_PUBLIC_WS_URL) {
+      console.log('✅ DEBUG - Usando URL del entorno:', process.env.NEXT_PUBLIC_WS_URL);
       return process.env.NEXT_PUBLIC_WS_URL;
     }
 
     if (typeof window === 'undefined') {
+      console.log('⚠️ DEBUG - Window undefined, usando localhost');
       return 'ws://localhost:8000/ws';
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host.includes('localhost') ? 'localhost:8000' : window.location.host;
-    return `${protocol}//${host}/ws`;
+    const finalUrl = `${protocol}//${host}/ws`;
+    
+    console.log('🔍 DEBUG - window.location.protocol:', window.location.protocol);
+    console.log('🔍 DEBUG - window.location.host:', window.location.host);
+    console.log('🔍 DEBUG - protocol calculado:', protocol);
+    console.log('🔍 DEBUG - host calculado:', host);
+    console.log('🔍 DEBUG - URL final calculada:', finalUrl);
+    
+    return finalUrl;
   }
 
   connect(): Promise<void> {

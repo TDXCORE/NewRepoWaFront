@@ -26,8 +26,14 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children, 
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
 
   useEffect(() => {
+    console.log('🔍 DEBUG - WebSocketContext useEffect iniciando...');
+    console.log('🔍 DEBUG - Token prop:', token ? `${token.substring(0, 20)}...` : 'undefined');
+    console.log('🔍 DEBUG - process.env.NEXT_PUBLIC_WS_TOKEN:', process.env.NEXT_PUBLIC_WS_TOKEN ? `${process.env.NEXT_PUBLIC_WS_TOKEN.substring(0, 20)}...` : 'undefined');
+    
     // Usar el token del entorno si no se proporciona uno
     const wsToken = token || process.env.NEXT_PUBLIC_WS_TOKEN;
+    console.log('🔍 DEBUG - Token final a usar:', wsToken ? `${wsToken.substring(0, 20)}...` : 'undefined');
+    
     const websocketService = getWebSocketService(wsToken);
     setWs(websocketService);
 
