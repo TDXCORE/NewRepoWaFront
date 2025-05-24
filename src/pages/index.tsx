@@ -1,26 +1,37 @@
 import React, { useEffect, useState } from 'react';
 import MainLayout from '../components/Layout/MainLayout';
 import { useWebSocket } from '../contexts/WebSocketContext';
-import { FiUsers, FiMessageSquare, FiCalendar, FiTrendingUp } from 'react-icons/fi';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import type { Conversation } from '../services/websocket';
+import { FiUsers, FiMessageSquare, FiCalendar, FiTrendingUp, FiActivity } from 'react-icons/fi';
+import { format, formatDistanceToNow } from 'date-fns';
+import { es } from 'date-fns/locale';
 
 const Dashboard: React.FC = () => {
   const { ws, isConnected } = useWebSocket();
-  const [stats, setStats] = useState({
+  const [basicStats, setBasicStats] = useState({
     totalUsers: 0,
-    totalConversations: 0,
-    totalMessages: 0,
-    activeMeetings: 0
+    activeConversations: 0,
+    totalMeetings: 0,
+    unreadMessages: 0
   });
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
 
   useEffect(() => {
     if (!ws || !isConnected) return;
-    loadDashboardData();
+    loadRealDashboardData();
+    
+    // Actualizar datos cada 30 segundos
+    const interval = setInterval(() => {
+      if (ws && isConnected) {
+        loadRealDashboardData();
+      }
+    }, 30000);
+
+    return () => clearInterval(interval);
   }, [ws, isConnected]);
 
-  const loadDashboardData = async () => {
+  const loadRealDashboardData = async () => {
     if (!ws) {
       console.log('⚠️ WebSocket no disponible para cargar dashboard');
       setLoading(false);
@@ -29,128 +40,121 @@ const Dashboard: React.FC = () => {
     
     try {
       setLoading(true);
-      console.log('🔄 Cargando datos del dashboard...');
+      console.log('🔄 Cargando datos reales básicos del dashboard...');
       
-      let newStats = {
-        totalUsers: 0,
-        totalConversations: 0,
-        totalMessages: 0,
-        activeMeetings: 0
-      };
-      
-      // Cargar usuarios (usando la misma lógica exitosa que users.tsx)
-      try {
-        const usersData = await ws.getUsers();
-        console.log('👥 Usuarios obtenidos:', usersData);
-        newStats.totalUsers = usersData.users?.length || 0;
-      } catch (error) {
-        console.error('❌ Error cargando usuarios:', error);
-        newStats.totalUsers = 0;
+      // Cargar datos básicos en paralelo usando las funciones que sabemos que existen
+      const [usersData, conversationsData, meetingsData] = await Promise.allSettled([
+        ws.getUsers(),
+        ws.getConversations(),
+        ws.getAllMeetings('all', '', 100, 0)
+      ]);
+
+      let totalUsers = 0;
+      let activeConversations = 0;
+      let totalMeetings = 0;
+      let unreadMessages = 0;
+      const activity: any[] = [];
+
+      // Procesar usuarios
+      if (usersData.status === 'fulfilled') {
+        const users = usersData.value.users || [];
+        totalUsers = users.length;
+        console.log(`👥 Total usuarios: ${totalUsers}`);
+        
+        // Agregar usuarios recientes a la actividad
+        users.slice(0, 5).forEach(user => {
+          activity.push({
+            type: 'new_user',
+            timestamp: user.created_at,
+            data: {
+              full_name: user.full_name,
+              user: user.full_name
+            }
+          });
+        });
+      } else {
+        console.error('❌ Error cargando usuarios:', usersData.reason);
       }
-      
-      // Cargar conversaciones con timeout extendido
-      try {
-        const conversationsPromise = ws.getConversations();
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Timeout cargando conversaciones')), 30000)
-        );
+
+      // Procesar conversaciones
+      if (conversationsData.status === 'fulfilled') {
+        const conversations = conversationsData.value.conversations || [];
+        activeConversations = conversations.filter(conv => conv.status === 'active').length;
+        console.log(`💬 Conversaciones activas: ${activeConversations}`);
         
-        const conversationsData = await Promise.race([conversationsPromise, timeoutPromise]) as any;
-        console.log('💬 Conversaciones obtenidas:', conversationsData);
-        
-        const conversations = conversationsData.conversations || [];
-        newStats.totalConversations = conversations.length;
-        newStats.activeMeetings = Math.floor(conversations.length * 0.15);
-        
-        console.log(`🔄 Cargando mensajes de TODAS las ${conversations.length} conversaciones...`);
-        
-        // Estrategia optimizada: Cargar mensajes de forma inteligente
-        console.log(`🔄 Cargando estadísticas de mensajes de ${conversations.length} conversaciones...`);
-        
-        // Mostrar estadísticas básicas inmediatamente
-        setStats(prevStats => ({
-          ...prevStats,
-          totalUsers: newStats.totalUsers,
-          totalConversations: newStats.totalConversations,
-          activeMeetings: newStats.activeMeetings
-        }));
-        
-        // Cargar mensajes en background de forma más eficiente
-        const loadMessagesInBackground = async () => {
-          const batchSize = 5; // Lotes más pequeños
-          let totalMessages = 0;
-          let processedConversations = 0;
-          
-          for (let i = 0; i < conversations.length; i += batchSize) {
-            const batch = conversations.slice(i, i + batchSize);
+        // Contar mensajes no leídos y agregar actividad
+        for (const conv of conversations.slice(0, 10)) {
+          try {
+            const messagesData = await ws.getMessages(conv.id);
+            const messages = messagesData.messages || [];
+            const unread = messages.filter(msg => !msg.read).length;
+            unreadMessages += unread;
             
-            try {
-              // Timeout más corto por lote
-              const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Timeout en lote de mensajes')), 8000)
-              );
-              
-              const messagePromises = batch.map(async (conversation: Conversation) => {
-                try {
-                  const messagesData = await ws.getMessages(conversation.id);
-                  return messagesData.messages?.length || 0;
-                } catch (error) {
-                  console.warn(`⚠️ Error cargando mensajes de conversación ${conversation.id}:`, error);
-                  return 0;
+            // Agregar mensajes recientes a la actividad
+            if (messages.length > 0) {
+              const lastMessage = messages[messages.length - 1];
+              activity.push({
+                type: 'new_message',
+                timestamp: lastMessage.created_at,
+                data: {
+                  user: conv.external_id || 'Usuario',
+                  content: lastMessage.content
                 }
               });
-              
-              const batchPromise = Promise.allSettled(messagePromises);
-              const results = await Promise.race([batchPromise, timeoutPromise]) as any;
-              
-              const batchTotal = results.reduce((sum: number, result: any) => {
-                return sum + (result.status === 'fulfilled' ? result.value : 0);
-              }, 0);
-              
-              totalMessages += batchTotal;
-              processedConversations += batch.length;
-              
-              // Actualizar progresivamente
-              setStats(prevStats => ({
-                ...prevStats,
-                totalMessages: totalMessages
-              }));
-              
-              const progress = Math.round((processedConversations / conversations.length) * 100);
-              console.log(`📊 Progreso mensajes: ${progress}% (${processedConversations}/${conversations.length})`);
-              
-              // Pausa entre lotes
-              if (i + batchSize < conversations.length) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-              }
-              
-            } catch (error) {
-              console.warn(`⚠️ Error en lote de mensajes ${i}-${i + batchSize}:`, error);
-              processedConversations += batch.length;
             }
+          } catch (error) {
+            console.warn(`⚠️ Error obteniendo mensajes para conversación ${conv.id}:`, error);
           }
-          
-          console.log(`✅ TOTAL MENSAJES CARGADOS: ${totalMessages} de ${conversations.length} conversaciones`);
-          return totalMessages;
-        };
-        
-        // Ejecutar carga de mensajes en background
-        loadMessagesInBackground().then(totalMessages => {
-          newStats.totalMessages = totalMessages;
-        }).catch(error => {
-          console.error('❌ Error en carga de mensajes en background:', error);
-          newStats.totalMessages = 0;
-        });
-        
-      } catch (error) {
-        console.error('❌ Error cargando conversaciones:', error);
-        newStats.totalConversations = 0;
-        newStats.activeMeetings = 0;
-        newStats.totalMessages = 0;
+        }
+        console.log(`📨 Mensajes no leídos: ${unreadMessages}`);
+      } else {
+        console.error('❌ Error cargando conversaciones:', conversationsData.reason);
       }
+
+      // Procesar reuniones
+      if (meetingsData.status === 'fulfilled') {
+        const meetings = meetingsData.value.meetings || [];
+        totalMeetings = meetings.length;
+        console.log(`📅 Total reuniones: ${totalMeetings}`);
+        
+        // Agregar reuniones recientes a la actividad
+        meetings.slice(0, 5).forEach((meeting: any) => {
+          activity.push({
+            type: 'new_meeting',
+            timestamp: meeting.created_at,
+            data: {
+              full_name: meeting.users?.full_name || 'Usuario',
+              subject: meeting.subject
+            }
+          });
+        });
+      } else {
+        console.error('❌ Error cargando reuniones:', meetingsData.reason);
+      }
+
+      // Actualizar estadísticas
+      setBasicStats({
+        totalUsers,
+        activeConversations,
+        totalMeetings,
+        unreadMessages
+      });
+
+      // Ordenar actividad por fecha (más reciente primero) y tomar las primeras 10
+      const sortedActivity = activity
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 10);
       
-      console.log('📊 Estadísticas calculadas:', newStats);
-      setStats(newStats);
+      setRecentActivity(sortedActivity);
+      setLastUpdate(new Date());
+      
+      console.log('✅ Dashboard cargado con datos reales:', {
+        totalUsers,
+        activeConversations,
+        totalMeetings,
+        unreadMessages,
+        activityItems: sortedActivity.length
+      });
       
     } catch (error) {
       console.error('❌ Error general cargando datos del dashboard:', error);
@@ -159,32 +163,23 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const statCards = [
-    {
-      name: 'Total Usuarios',
-      value: stats.totalUsers,
-      icon: FiUsers,
-      color: 'bg-blue-500',
-    },
-    {
-      name: 'Conversaciones',
-      value: stats.totalConversations,
-      icon: FiMessageSquare,
-      color: 'bg-green-500',
-    },
-    {
-      name: 'Mensajes Totales',
-      value: stats.totalMessages,
-      icon: FiTrendingUp,
-      color: 'bg-purple-500',
-    },
-    {
-      name: 'Reuniones Activas',
-      value: stats.activeMeetings,
-      icon: FiCalendar,
-      color: 'bg-yellow-500',
+  const getActivityTypeIcon = (type: string) => {
+    switch (type) {
+      case 'new_user': return '👤';
+      case 'new_message': return '💬';
+      case 'new_meeting': return '📅';
+      default: return '📋';
     }
-  ];
+  };
+
+  const getActivityTypeLabel = (type: string) => {
+    switch (type) {
+      case 'new_user': return 'Nuevo usuario';
+      case 'new_message': return 'Nuevo mensaje';
+      case 'new_meeting': return 'Nueva reunión';
+      default: return 'Actividad';
+    }
+  };
 
   if (loading) {
     return (
@@ -196,14 +191,54 @@ const Dashboard: React.FC = () => {
     );
   }
 
+  const statCards = [
+    {
+      name: 'Total Usuarios',
+      value: basicStats.totalUsers,
+      icon: FiUsers,
+      color: 'bg-blue-500',
+      change: basicStats.totalUsers > 0 ? `${basicStats.totalUsers} registrados` : null
+    },
+    {
+      name: 'Conversaciones Activas',
+      value: basicStats.activeConversations,
+      icon: FiMessageSquare,
+      color: 'bg-green-500',
+      change: basicStats.unreadMessages > 0 ? `${basicStats.unreadMessages} no leídos` : null
+    },
+    {
+      name: 'Mensajes Totales',
+      value: basicStats.unreadMessages,
+      icon: FiTrendingUp,
+      color: 'bg-purple-500',
+      change: 'En tiempo real'
+    },
+    {
+      name: 'Reuniones Totales',
+      value: basicStats.totalMeetings,
+      icon: FiCalendar,
+      color: 'bg-yellow-500',
+      change: basicStats.totalMeetings > 0 ? `${basicStats.totalMeetings} programadas` : null
+    }
+  ];
+
   return (
     <MainLayout>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            Resumen de actividad y métricas clave del sistema
-          </p>
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+            <p className="mt-2 text-sm text-gray-600">
+              Resumen de actividad y métricas clave del sistema
+            </p>
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            <span className="text-sm font-medium text-gray-700">Período:</span>
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+              Tiempo Real
+            </span>
+          </div>
         </div>
 
         {/* Tarjetas de estadísticas */}
@@ -218,27 +253,93 @@ const Dashboard: React.FC = () => {
               </dt>
               <dd className="ml-16 pb-6 flex items-baseline sm:pb-7">
                 <p className="text-2xl font-semibold text-gray-900">{card.value}</p>
+                {card.change && (
+                  <p className="ml-2 flex items-baseline text-sm font-semibold text-green-600">
+                    {card.change}
+                  </p>
+                )}
               </dd>
             </div>
           ))}
         </div>
 
-        {/* Actividad reciente - Solo datos reales */}
+        {/* Actividad Reciente */}
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
               Actividad Reciente
             </h3>
-            <div className="text-center py-8">
-              <FiTrendingUp className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">
-                Actividad en tiempo real
-              </h3>
-              <p className="mt-1 text-sm text-gray-500">
-                La actividad reciente se mostrará cuando haya eventos del sistema.
-              </p>
-            </div>
+            {recentActivity.length > 0 ? (
+              <div className="flow-root">
+                <ul className="-mb-8">
+                  {recentActivity.map((activity, activityIdx) => (
+                    <li key={`${activity.type}-${activity.timestamp}-${activityIdx}`}>
+                      <div className="relative pb-8">
+                        {activityIdx !== recentActivity.length - 1 ? (
+                          <span
+                            className="absolute top-4 left-4 -ml-px h-full w-0.5 bg-gray-200"
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                        <div className="relative flex space-x-3">
+                          <div>
+                            <span className="h-8 w-8 rounded-full bg-gray-100 flex items-center justify-center text-sm">
+                              {getActivityTypeIcon(activity.type)}
+                            </span>
+                          </div>
+                          <div className="min-w-0 flex-1 pt-1.5 flex justify-between space-x-4">
+                            <div>
+                              <p className="text-sm text-gray-900">
+                                <span className="font-medium">{getActivityTypeLabel(activity.type)}</span>
+                                {activity.data?.user && (
+                                  <span className="text-gray-600"> - {activity.data.user}</span>
+                                )}
+                                {activity.data?.full_name && (
+                                  <span className="text-gray-600"> - {activity.data.full_name}</span>
+                                )}
+                              </p>
+                              {activity.data?.content && (
+                                <p className="text-xs text-gray-500 mt-1 truncate max-w-md">
+                                  {activity.data.content}
+                                </p>
+                              )}
+                              {activity.data?.subject && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {activity.data.subject}
+                                </p>
+                              )}
+                            </div>
+                            <div className="text-right text-sm whitespace-nowrap text-gray-500">
+                              {formatDistanceToNow(new Date(activity.timestamp), { 
+                                addSuffix: true, 
+                                locale: es 
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <FiActivity className="mx-auto h-12 w-12 text-gray-400" />
+                <h3 className="mt-2 text-sm font-medium text-gray-900">
+                  Actividad en tiempo real
+                </h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  La actividad reciente se mostrará cuando haya eventos del sistema.
+                </p>
+              </div>
+            )}
           </div>
+        </div>
+
+        {/* Información de actualización */}
+        <div className="mt-4 text-center text-xs text-gray-500">
+          Última actualización: {format(lastUpdate, 'HH:mm:ss')} • 
+          Estado: {isConnected ? '🟢 Conectado' : '🔴 Desconectado'}
         </div>
       </div>
     </MainLayout>

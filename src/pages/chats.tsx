@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import MainLayout from '../components/Layout/MainLayout';
 import { useWebSocket } from '../contexts/WebSocketContext';
-import { FiSend, FiUser, FiMessageCircle, FiSearch, FiFilter, FiX } from 'react-icons/fi';
+import { FiSend, FiUser, FiMessageCircle, FiSearch, FiFilter, FiX, FiCpu, FiArchive, FiInfo } from 'react-icons/fi';
 import { format, formatDistanceToNow } from 'date-fns';
 import { es } from 'date-fns/locale';
 import clsx from 'clsx';
@@ -349,6 +349,69 @@ const ChatsPage: React.FC = () => {
     });
   };
 
+  // Función para toggle del agente IA
+  const toggleAgentStatus = async (conversationId: string, enabled: boolean) => {
+    if (!ws) return;
+    
+    try {
+      console.log(`🤖 ${enabled ? 'Activando' : 'Desactivando'} agente IA para conversación ${conversationId}`);
+      await ws.toggleAgentStatus(conversationId, enabled);
+      
+      // Actualizar el estado local
+      setConversations(prev => prev.map(conv => 
+        conv.id === conversationId 
+          ? { ...conv, agent_enabled: enabled }
+          : conv
+      ));
+      
+      if (selectedConversation?.id === conversationId) {
+        setSelectedConversation(prev => prev ? { ...prev, agent_enabled: enabled } : null);
+      }
+      
+      console.log(`✅ Agente IA ${enabled ? 'activado' : 'desactivado'} correctamente`);
+    } catch (error) {
+      console.error('❌ Error cambiando estado del agente IA:', error);
+    }
+  };
+
+  // Función para archivar conversación
+  const archiveConversation = async (conversationId: string) => {
+    if (!ws) return;
+    
+    try {
+      console.log(`📁 Archivando conversación ${conversationId}`);
+      await ws.archiveConversation(conversationId);
+      
+      // Remover la conversación de la lista
+      setConversations(prev => prev.filter(conv => conv.id !== conversationId));
+      
+      // Si era la conversación seleccionada, limpiar selección
+      if (selectedConversation?.id === conversationId) {
+        setSelectedConversation(null);
+        setMessages([]);
+      }
+      
+      console.log('✅ Conversación archivada correctamente');
+    } catch (error) {
+      console.error('❌ Error archivando conversación:', error);
+    }
+  };
+
+  // Función para obtener detalles completos de una conversación
+  const getConversationDetails = async (conversationId: string) => {
+    if (!ws) return null;
+    
+    try {
+      console.log(`🔍 Obteniendo detalles completos de conversación ${conversationId}`);
+      const details = await ws.getConversationDetails(conversationId);
+      console.log('📋 Detalles de conversación:', details);
+      return details;
+    } catch (error) {
+      console.error('❌ Error obteniendo detalles de conversación:', error);
+      return null;
+    }
+  };
+
   // Obtener opciones únicas para los filtros
   const platformOptions = useMemo(() => {
     const platforms = Array.from(new Set(conversations.map(c => c.platform).filter(Boolean)));
@@ -636,18 +699,76 @@ const ChatsPage: React.FC = () => {
               <>
                 {/* Header del chat */}
                 <div className="p-4 border-b border-gray-200 bg-white">
-                  <div className="flex items-center space-x-3">
-                    <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center">
-                      <FiUser className="h-4 w-4 text-indigo-600" />
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center">
+                        <FiUser className="h-4 w-4 text-indigo-600" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-medium text-gray-900">
+                          {selectedConversation.user?.full_name || 'Usuario sin nombre'}
+                        </h3>
+                        <p className="text-xs text-gray-500">
+                          {selectedConversation.user?.phone}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-900">
-                        {selectedConversation.user?.full_name || 'Usuario sin nombre'}
-                      </h3>
-                      <p className="text-xs text-gray-500">
-                        {selectedConversation.user?.phone}
-                      </p>
+                    
+                    {/* Controles de conversación */}
+                    <div className="flex items-center space-x-2">
+                      {/* Toggle Agente IA */}
+                      {!selectedConversation.isRecovered && (
+                        <button
+                          onClick={() => toggleAgentStatus(selectedConversation.id, !selectedConversation.agent_enabled)}
+                          className={clsx(
+                            'inline-flex items-center px-3 py-1 rounded-md text-xs font-medium transition-colors',
+                            selectedConversation.agent_enabled
+                              ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                              : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                          )}
+                          title={selectedConversation.agent_enabled ? 'Desactivar Agente IA' : 'Activar Agente IA'}
+                        >
+                          <FiCpu className="h-3 w-3 mr-1" />
+                          {selectedConversation.agent_enabled ? 'IA Activa' : 'IA Inactiva'}
+                        </button>
+                      )}
+                      
+                      {/* Botón de información */}
+                      <button
+                        onClick={() => getConversationDetails(selectedConversation.id)}
+                        className="p-2 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100"
+                        title="Ver detalles de conversación"
+                      >
+                        <FiInfo className="h-4 w-4" />
+                      </button>
+                      
+                      {/* Botón archivar */}
+                      {!selectedConversation.isRecovered && (
+                        <button
+                          onClick={() => {
+                            if (confirm('¿Estás seguro de que quieres archivar esta conversación?')) {
+                              archiveConversation(selectedConversation.id);
+                            }
+                          }}
+                          className="p-2 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50"
+                          title="Archivar conversación"
+                        >
+                          <FiArchive className="h-4 w-4" />
+                        </button>
+                      )}
                     </div>
+                  </div>
+                  
+                  {/* Información adicional de la conversación */}
+                  <div className="mt-2 flex items-center space-x-4 text-xs text-gray-500">
+                    <span>Plataforma: {selectedConversation.platform}</span>
+                    <span>Estado: {selectedConversation.status}</span>
+                    {selectedConversation.isRecovered && (
+                      <span className="text-orange-600">Conversación recuperada</span>
+                    )}
+                    {selectedConversation.agent_enabled && (
+                      <span className="text-green-600">🤖 Agente IA activo</span>
+                    )}
                   </div>
                 </div>
 

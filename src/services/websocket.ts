@@ -73,8 +73,15 @@ class WebSocketService {
       return 'ws://localhost:8000/ws';
     }
 
+    // Para desarrollo local, usar localhost:8000
+    if (window.location.host.includes('localhost')) {
+      const finalUrl = 'ws://localhost:8000/ws';
+      console.log('🔍 DEBUG - Desarrollo local, usando:', finalUrl);
+      return finalUrl;
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host.includes('localhost') ? 'localhost:8000' : window.location.host;
+    const host = window.location.host;
     const finalUrl = `${protocol}//${host}/ws`;
     
     console.log('🔍 DEBUG - window.location.protocol:', window.location.protocol);
@@ -307,112 +314,159 @@ class WebSocketService {
 
   // API de Usuarios
   async getUsers(): Promise<{ users: User[] }> {
-    return this.send('users', 'get_all');
+    return this.send('users', 'get_all_users');
   }
 
-  // API de Conversaciones - Versión híbrida optimizada
+  // API de Conversaciones - Versión simplificada
   async getConversations(userId?: string): Promise<{ conversations: Conversation[] }> {
-    if (userId) {
-      // Si se proporciona un user_id específico, usarlo directamente
-      return this.send('conversations', 'get_all', { user_id: userId });
-    } else {
-      // Obtener conversaciones de todos los usuarios de manera optimizada
-      console.log('🚀 Carga híbrida de conversaciones iniciada...');
-      try {
-        // Primero obtener todos los usuarios
-        const usersData = await this.getUsers();
-        const users = usersData.users || [];
-        
-        if (users.length === 0) {
-          console.log('⚠️ No hay usuarios, devolviendo conversaciones vacías');
-          return { conversations: [] };
-        }
-        
-        console.log(`📊 Procesando ${users.length} usuarios en lotes optimizados`);
-        
-        // Procesar usuarios en lotes de 8 para mejor rendimiento
-        const batchSize = 8;
-        const allConversations: Conversation[] = [];
-        let processedUsers = 0;
-        
-        for (let i = 0; i < users.length; i += batchSize) {
-          const batch = users.slice(i, i + batchSize);
-          const batchNumber = Math.floor(i/batchSize) + 1;
-          const totalBatches = Math.ceil(users.length/batchSize);
-          
-          console.log(`🔄 Lote ${batchNumber}/${totalBatches} - Procesando usuarios ${i + 1}-${Math.min(i + batchSize, users.length)}`);
-          
-          // Obtener conversaciones en paralelo para este lote con timeout
-          const conversationPromises = batch.map(async (user) => {
-            try {
-              // Timeout de 8 segundos por usuario
-              const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error(`Timeout para usuario ${user.full_name}`)), 8000)
-              );
-              
-              const conversationPromise = this.send('conversations', 'get_all', { user_id: user.id });
-              const userConversations = await Promise.race([conversationPromise, timeoutPromise]) as any;
-              
-              return {
-                user,
-                conversations: userConversations.conversations || [],
-                success: true
-              };
-            } catch (error) {
-              console.warn(`⚠️ Error obteniendo conversaciones para usuario ${user.full_name} (${user.id}):`, error);
-              return {
-                user,
-                conversations: [],
-                success: false
-              };
-            }
-          });
-          
-          const results = await Promise.allSettled(conversationPromises);
-          
-          results.forEach((result) => {
-            if (result.status === 'fulfilled') {
-              if (result.value.success && result.value.conversations.length > 0) {
-                allConversations.push(...result.value.conversations);
-                console.log(`✅ Usuario ${result.value.user.full_name}: ${result.value.conversations.length} conversaciones`);
-              }
-              processedUsers++;
-            }
-          });
-          
-          // Progreso de carga
-          const progress = Math.round((processedUsers / users.length) * 100);
-          console.log(`📊 Progreso: ${progress}% (${processedUsers}/${users.length} usuarios procesados)`);
-          
-          // Pausa entre lotes para no sobrecargar el servidor
-          if (i + batchSize < users.length) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-        }
-        
-        console.log(`✅ TOTAL CONVERSACIONES OBTENIDAS: ${allConversations.length} de ${users.length} usuarios`);
-        return { conversations: allConversations };
-        
-      } catch (error) {
-        console.error('❌ Error obteniendo conversaciones de todos los usuarios:', error);
-        return { conversations: [] };
-      }
+    try {
+      // Usar get_user_conversations que está mapeado a get_conversations_by_agent_status
+      console.log('🔍 Obteniendo todas las conversaciones...');
+      return this.send('conversations', 'get_user_conversations', { agent_enabled: true });
+    } catch (error) {
+      console.error('❌ Error obteniendo conversaciones:', error);
+      return { conversations: [] };
     }
   }
 
   // API de Mensajes
   async getMessages(conversationId: string): Promise<{ messages: Message[] }> {
-    return this.send('messages', 'get_by_conversation', { conversation_id: conversationId });
+    return this.send('messages', 'get_conversation_messages', { conversation_id: conversationId });
   }
 
   async sendMessage(conversationId: string, content: string, role: 'user' | 'assistant' = 'user'): Promise<{ message: Message }> {
-    return this.send('messages', 'create', {
+    return this.send('messages', 'send_message', {
       message: {
         conversation_id: conversationId,
         content,
         role
       }
     });
+  }
+
+  // API de Dashboard
+  async getDashboardStats(dateRange: string = 'today'): Promise<any> {
+    return this.send('dashboard', 'get_dashboard_stats', { date_range: dateRange });
+  }
+
+  async getConversionFunnel(dateRange: string = 'all'): Promise<any> {
+    return this.send('dashboard', 'get_conversion_funnel', { date_range: dateRange });
+  }
+
+  async getActivityTimeline(hours: number = 24): Promise<any> {
+    return this.send('dashboard', 'get_activity_timeline', { hours });
+  }
+
+  async getAgentPerformance(dateRange: string = 'week'): Promise<any> {
+    return this.send('dashboard', 'get_agent_performance', { date_range: dateRange });
+  }
+
+  async getRealTimeMetrics(): Promise<any> {
+    return this.send('dashboard', 'get_real_time_metrics');
+  }
+
+  // API de Conversaciones Avanzadas
+  async getConversationDetails(conversationId: string): Promise<any> {
+    return this.send('conversations', 'get_conversation_with_details', { conversation_id: conversationId });
+  }
+
+  async getConversationsByAgentStatus(agentEnabled: boolean, userId?: string): Promise<any> {
+    return this.send('conversations', 'get_conversations_by_agent_status', { 
+      agent_enabled: agentEnabled,
+      user_id: userId 
+    });
+  }
+
+  async toggleAgentStatus(conversationId: string, enabled: boolean): Promise<any> {
+    return this.send('conversations', 'toggle_agent_status', { 
+      conversation_id: conversationId,
+      enabled 
+    });
+  }
+
+  async archiveConversation(conversationId: string): Promise<any> {
+    return this.send('conversations', 'archive_conversation', { conversation_id: conversationId });
+  }
+
+  // API de Meetings
+  async getAllMeetings(filter: string = 'all', status?: string, limit: number = 50, offset: number = 0): Promise<any> {
+    return this.send('meetings', 'get_all_meetings', { 
+      filter, 
+      status, 
+      limit, 
+      offset 
+    });
+  }
+
+  async getCalendarView(startDate: string, endDate: string): Promise<any> {
+    return this.send('meetings', 'get_calendar_view', { 
+      start_date: startDate,
+      end_date: endDate 
+    });
+  }
+
+  async createMeeting(meetingData: any): Promise<any> {
+    return this.send('meetings', 'create_meeting', { meeting: meetingData });
+  }
+
+  async updateMeeting(meetingId: string, meetingData: any): Promise<any> {
+    return this.send('meetings', 'update_meeting', { 
+      meeting_id: meetingId,
+      meeting: meetingData 
+    });
+  }
+
+  async cancelMeeting(meetingId: string, reason: string = 'Cancelada por el usuario'): Promise<any> {
+    return this.send('meetings', 'cancel_meeting', { 
+      meeting_id: meetingId,
+      reason 
+    });
+  }
+
+  async getAvailableSlots(date: string, durationMinutes: number = 60): Promise<any> {
+    return this.send('meetings', 'get_available_slots', { 
+      date,
+      duration_minutes: durationMinutes 
+    });
+  }
+
+  async syncOutlookCalendar(direction: string = 'bidirectional', daysRange: number = 30): Promise<any> {
+    return this.send('meetings', 'sync_outlook_calendar', { 
+      direction,
+      days_range: daysRange 
+    });
+  }
+
+  // API de Usuarios Avanzada
+  async getUsersWithStats(limit: number = 50, offset: number = 0): Promise<any> {
+    return this.send('users', 'get_all_with_stats', { limit, offset });
+  }
+
+  async getUserProfile(userId: string): Promise<any> {
+    return this.send('users', 'get_profile', { user_id: userId });
+  }
+
+  async searchUsers(searchTerm: string, limit: number = 50, offset: number = 0): Promise<any> {
+    return this.send('users', 'search', { 
+      search_term: searchTerm,
+      limit,
+      offset 
+    });
+  }
+
+  async createUser(userData: any): Promise<any> {
+    return this.send('users', 'create_user', { user: userData });
+  }
+
+  async updateUser(userId: string, userData: any): Promise<any> {
+    return this.send('users', 'update_user', { 
+      user_id: userId,
+      user: userData 
+    });
+  }
+
+  async deleteUser(userId: string): Promise<any> {
+    return this.send('users', 'delete_user', { user_id: userId });
   }
 
   // Eventos
