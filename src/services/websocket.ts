@@ -310,20 +310,91 @@ class WebSocketService {
     return this.send('users', 'get_all');
   }
 
-  // API de Conversaciones - Versión optimizada
+  // API de Conversaciones - Versión híbrida optimizada
   async getConversations(userId?: string): Promise<{ conversations: Conversation[] }> {
     if (userId) {
       // Si se proporciona un user_id específico, usarlo directamente
       return this.send('conversations', 'get_all', { user_id: userId });
     } else {
-      // Obtener todas las conversaciones directamente del backend
-      console.log('🚀 Obteniendo todas las conversaciones (optimizado)...');
+      // Obtener conversaciones de todos los usuarios de manera optimizada
+      console.log('🚀 Carga híbrida de conversaciones iniciada...');
       try {
-        const result = await this.send('conversations', 'get_all');
-        console.log(`✅ Conversaciones obtenidas: ${result.conversations?.length || 0}`);
-        return result;
+        // Primero obtener todos los usuarios
+        const usersData = await this.getUsers();
+        const users = usersData.users || [];
+        
+        if (users.length === 0) {
+          console.log('⚠️ No hay usuarios, devolviendo conversaciones vacías');
+          return { conversations: [] };
+        }
+        
+        console.log(`📊 Procesando ${users.length} usuarios en lotes optimizados`);
+        
+        // Procesar usuarios en lotes de 8 para mejor rendimiento
+        const batchSize = 8;
+        const allConversations: Conversation[] = [];
+        let processedUsers = 0;
+        
+        for (let i = 0; i < users.length; i += batchSize) {
+          const batch = users.slice(i, i + batchSize);
+          const batchNumber = Math.floor(i/batchSize) + 1;
+          const totalBatches = Math.ceil(users.length/batchSize);
+          
+          console.log(`🔄 Lote ${batchNumber}/${totalBatches} - Procesando usuarios ${i + 1}-${Math.min(i + batchSize, users.length)}`);
+          
+          // Obtener conversaciones en paralelo para este lote con timeout
+          const conversationPromises = batch.map(async (user) => {
+            try {
+              // Timeout de 8 segundos por usuario
+              const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error(`Timeout para usuario ${user.full_name}`)), 8000)
+              );
+              
+              const conversationPromise = this.send('conversations', 'get_all', { user_id: user.id });
+              const userConversations = await Promise.race([conversationPromise, timeoutPromise]) as any;
+              
+              return {
+                user,
+                conversations: userConversations.conversations || [],
+                success: true
+              };
+            } catch (error) {
+              console.warn(`⚠️ Error obteniendo conversaciones para usuario ${user.full_name} (${user.id}):`, error);
+              return {
+                user,
+                conversations: [],
+                success: false
+              };
+            }
+          });
+          
+          const results = await Promise.allSettled(conversationPromises);
+          
+          results.forEach((result) => {
+            if (result.status === 'fulfilled') {
+              if (result.value.success && result.value.conversations.length > 0) {
+                allConversations.push(...result.value.conversations);
+                console.log(`✅ Usuario ${result.value.user.full_name}: ${result.value.conversations.length} conversaciones`);
+              }
+              processedUsers++;
+            }
+          });
+          
+          // Progreso de carga
+          const progress = Math.round((processedUsers / users.length) * 100);
+          console.log(`📊 Progreso: ${progress}% (${processedUsers}/${users.length} usuarios procesados)`);
+          
+          // Pausa entre lotes para no sobrecargar el servidor
+          if (i + batchSize < users.length) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        }
+        
+        console.log(`✅ TOTAL CONVERSACIONES OBTENIDAS: ${allConversations.length} de ${users.length} usuarios`);
+        return { conversations: allConversations };
+        
       } catch (error) {
-        console.error('❌ Error obteniendo conversaciones:', error);
+        console.error('❌ Error obteniendo conversaciones de todos los usuarios:', error);
         return { conversations: [] };
       }
     }

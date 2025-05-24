@@ -119,19 +119,18 @@ const ChatsPage: React.FC = () => {
     
     try {
       setLoading(true);
-      console.log('🚀 Carga rápida de conversaciones iniciada...');
+      console.log('🚀 Carga híbrida de conversaciones iniciada...');
       
-      // Cargar usuarios y conversaciones en paralelo
-      const [conversationsData, usersData] = await Promise.all([
-        ws.getConversations(),
-        ws.getUsers()
-      ]);
-      
-      console.log(`💬 Conversaciones obtenidas: ${conversationsData.conversations?.length || 0}`);
+      // Obtener usuarios primero
+      const usersData = await ws.getUsers();
       console.log(`👥 Usuarios obtenidos: ${usersData.users?.length || 0}`);
-
+      
       // Crear mapa de usuarios para búsqueda rápida
       const usersMap = new Map((usersData.users || []).map(user => [user.id, user]));
+      
+      // Obtener conversaciones usando la nueva estrategia híbrida
+      const conversationsData = await ws.getConversations();
+      console.log(`💬 Conversaciones obtenidas: ${conversationsData.conversations?.length || 0}`);
 
       // Enriquecer conversaciones con datos de usuario
       const enrichedConversations: EnrichedConversation[] = (conversationsData.conversations || []).map(conversation => ({
