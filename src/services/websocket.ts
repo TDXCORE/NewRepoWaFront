@@ -304,155 +304,26 @@ class WebSocketService {
     });
   }
 
-  // Método para reintentar usuarios sin conversaciones con timeout extendido
-  private async retryUsersWithoutConversations(users: User[]): Promise<Conversation[]> {
-    const recoveredConversations: Conversation[] = [];
-    
-    console.log(`🔄 Reintentando ${users.length} usuarios sin conversaciones con timeout extendido...`);
-    
-    // Procesar usuarios de uno en uno con timeout extendido
-    for (const user of users) {
-      try {
-        console.log(`🔄 Reintentando usuario: ${user.full_name} (${user.id})`);
-        
-        // Timeout extendido de 15 segundos para usuarios problemáticos
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error(`Timeout extendido para usuario ${user.full_name}`)), 15000)
-        );
-        
-        const conversationPromise = this.send('conversations', 'get_all', { user_id: user.id });
-        const userConversations = await Promise.race([conversationPromise, timeoutPromise]) as any;
-        
-        if (userConversations.conversations && userConversations.conversations.length > 0) {
-          recoveredConversations.push(...userConversations.conversations);
-          console.log(`✅ RECUPERADO - Usuario ${user.full_name}: ${userConversations.conversations.length} conversaciones`);
-        } else {
-          console.log(`📝 Usuario ${user.full_name}: Sin conversaciones confirmado`);
-        }
-        
-        // Pausa entre reintentos para no sobrecargar
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-      } catch (error) {
-        console.error(`❌ Error en reintento para usuario ${user.full_name}:`, error);
-      }
-    }
-    
-    return recoveredConversations;
-  }
 
   // API de Usuarios
   async getUsers(): Promise<{ users: User[] }> {
     return this.send('users', 'get_all');
   }
 
-  // API de Conversaciones
+  // API de Conversaciones - Versión optimizada
   async getConversations(userId?: string): Promise<{ conversations: Conversation[] }> {
     if (userId) {
       // Si se proporciona un user_id específico, usarlo directamente
       return this.send('conversations', 'get_all', { user_id: userId });
     } else {
-      // Si no se proporciona user_id, obtener conversaciones de todos los usuarios
+      // Obtener todas las conversaciones directamente del backend
+      console.log('🚀 Obteniendo todas las conversaciones (optimizado)...');
       try {
-        console.log('🔄 Obteniendo conversaciones de TODOS los usuarios...');
-        
-        // Primero obtener todos los usuarios
-        const usersData = await this.getUsers();
-        const users = usersData.users || [];
-        
-        if (users.length === 0) {
-          console.log('⚠️ No hay usuarios, devolviendo conversaciones vacías');
-          return { conversations: [] };
-        }
-        
-        console.log(`📊 Procesando TODOS los ${users.length} usuarios para obtener todas las conversaciones`);
-        
-        // Procesar usuarios en lotes más pequeños de 5 para mejor rendimiento
-        const batchSize = 5;
-        const allConversations: Conversation[] = [];
-        let processedUsers = 0;
-        
-        for (let i = 0; i < users.length; i += batchSize) {
-          const batch = users.slice(i, i + batchSize);
-          const batchNumber = Math.floor(i/batchSize) + 1;
-          const totalBatches = Math.ceil(users.length/batchSize);
-          
-          console.log(`🔄 Lote ${batchNumber}/${totalBatches} - Procesando usuarios ${i + 1}-${Math.min(i + batchSize, users.length)}`);
-          
-          // Obtener conversaciones en paralelo para este lote con timeout individual
-          const conversationPromises = batch.map(async (user) => {
-            try {
-              // Timeout individual de 5 segundos por usuario
-              const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error(`Timeout para usuario ${user.full_name}`)), 5000)
-              );
-              
-              const conversationPromise = this.send('conversations', 'get_all', { user_id: user.id });
-              const userConversations = await Promise.race([conversationPromise, timeoutPromise]) as any;
-              
-              return {
-                user,
-                conversations: userConversations.conversations || [],
-                success: true
-              };
-            } catch (error) {
-              console.warn(`⚠️ Error obteniendo conversaciones para usuario ${user.full_name} (${user.id}):`, error);
-              return {
-                user,
-                conversations: [],
-                success: false
-              };
-            }
-          });
-          
-          const results = await Promise.allSettled(conversationPromises);
-          
-          results.forEach((result) => {
-            if (result.status === 'fulfilled') {
-              if (result.value.success && result.value.conversations.length > 0) {
-                allConversations.push(...result.value.conversations);
-                console.log(`✅ Usuario ${result.value.user.full_name}: ${result.value.conversations.length} conversaciones`);
-              } else if (result.value.success) {
-                console.log(`📝 Usuario ${result.value.user.full_name}: 0 conversaciones`);
-              }
-              processedUsers++;
-            }
-          });
-          
-          // Progreso de carga
-          const progress = Math.round((processedUsers / users.length) * 100);
-          console.log(`📊 Progreso: ${progress}% (${processedUsers}/${users.length} usuarios procesados)`);
-          
-          // Pausa más larga entre lotes para no sobrecargar el servidor
-          if (i + batchSize < users.length) {
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
-        }
-        
-        console.log(`✅ TOTAL CONVERSACIONES OBTENIDAS: ${allConversations.length} de ${users.length} usuarios`);
-        
-        // Diagnóstico: Verificar qué usuarios no tienen conversaciones
-        const usersWithConversations = new Set(allConversations.map(conv => conv.user_id));
-        const usersWithoutConversations = users.filter(user => !usersWithConversations.has(user.id));
-        
-        if (usersWithoutConversations.length > 0) {
-          console.warn(`⚠️ USUARIOS SIN CONVERSACIONES DETECTADOS: ${usersWithoutConversations.length}`);
-          usersWithoutConversations.forEach(user => {
-            console.warn(`   - Usuario: ${user.full_name} (ID: ${user.id})`);
-          });
-          
-          // Intentar recargar usuarios sin conversaciones con timeout extendido
-          console.log('🔄 Reintentando carga para usuarios sin conversaciones...');
-          const retryResults = await this.retryUsersWithoutConversations(usersWithoutConversations);
-          allConversations.push(...retryResults);
-          
-          console.log(`✅ TOTAL FINAL CONVERSACIONES: ${allConversations.length} (recuperadas: ${retryResults.length})`);
-        }
-        
-        return { conversations: allConversations };
-        
+        const result = await this.send('conversations', 'get_all');
+        console.log(`✅ Conversaciones obtenidas: ${result.conversations?.length || 0}`);
+        return result;
       } catch (error) {
-        console.error('❌ Error obteniendo conversaciones de todos los usuarios:', error);
+        console.error('❌ Error obteniendo conversaciones:', error);
         return { conversations: [] };
       }
     }

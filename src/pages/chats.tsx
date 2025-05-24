@@ -445,6 +445,8 @@ const ChatsPage: React.FC = () => {
               <div className="relative">
                 <FiSearch className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                 <input
+                  id="search-conversations"
+                  name="searchTerm"
                   type="text"
                   placeholder="Buscar por usuario, teléfono, email..."
                   className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -464,6 +466,8 @@ const ChatsPage: React.FC = () => {
                       Plataforma
                     </label>
                     <select
+                      id="filter-platform"
+                      name="platform"
                       value={filters.platform}
                       onChange={(e) => setFilters(prev => ({ ...prev, platform: e.target.value }))}
                       className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-1 focus:ring-indigo-500"
@@ -483,6 +487,8 @@ const ChatsPage: React.FC = () => {
                       Estado
                     </label>
                     <select
+                      id="filter-status"
+                      name="status"
                       value={filters.status}
                       onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
                       className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-1 focus:ring-indigo-500"
@@ -503,6 +509,8 @@ const ChatsPage: React.FC = () => {
                         Desde
                       </label>
                       <input
+                        id="filter-date-from"
+                        name="dateFrom"
                         type="date"
                         value={filters.dateFrom}
                         onChange={(e) => setFilters(prev => ({ ...prev, dateFrom: e.target.value }))}
@@ -514,6 +522,8 @@ const ChatsPage: React.FC = () => {
                         Hasta
                       </label>
                       <input
+                        id="filter-date-to"
+                        name="dateTo"
                         type="date"
                         value={filters.dateTo}
                         onChange={(e) => setFilters(prev => ({ ...prev, dateTo: e.target.value }))}
@@ -676,6 +686,8 @@ const ChatsPage: React.FC = () => {
                 <div className="p-4 border-t border-gray-200">
                   <div className="flex space-x-2">
                     <input
+                      id="new-message-input"
+                      name="newMessage"
                       type="text"
                       placeholder="Escribe un mensaje..."
                       className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
