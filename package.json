@@ -4,7 +4,7 @@
   "description": "Frontend para FullStackAgent - Dashboard de conversaciones y gestión de leads",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
+    "dev": "next dev -p 3002",
     "build": "next build",
     "start": "next start",
     "export": "next export",

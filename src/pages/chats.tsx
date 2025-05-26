@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import MainLayout from '../components/Layout/MainLayout';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { FiSend, FiUser, FiMessageCircle, FiSearch, FiFilter, FiX, FiCpu, FiArchive, FiInfo, FiRefreshCw } from 'react-icons/fi';
@@ -33,6 +33,9 @@ const ChatsPage: React.FC = () => {
   const [loadingStats, setLoadingStats] = useState({ usersTotal: 0, conversationsTotal: 0, usersWithoutConversations: 0 });
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   
+  // Referencia para scroll automático
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
   // Estados de filtros
   const [filters, setFilters] = useState<FilterState>({
     searchTerm: '',
@@ -42,8 +45,50 @@ const ChatsPage: React.FC = () => {
     dateTo: ''
   });
 
+  // Función para hacer scroll al final del chat
+  const scrollToBottom = () => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  // Función para formatear timestamp de manera más específica
+  const formatSpecificTime = (dateString: string): string => {
+    const now = new Date();
+    const date = new Date(dateString);
+    const diffInMs = now.getTime() - date.getTime();
+    const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+    const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+    const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+    const diffInWeeks = Math.floor(diffInMs / (1000 * 60 * 60 * 24 * 7));
+
+    if (diffInMinutes < 1) {
+      return 'hace menos de 1 minuto';
+    } else if (diffInMinutes < 60) {
+      return `hace ${diffInMinutes} minuto${diffInMinutes !== 1 ? 's' : ''}`;
+    } else if (diffInHours < 24) {
+      return `hace ${diffInHours} hora${diffInHours !== 1 ? 's' : ''}`;
+    } else if (diffInDays < 7) {
+      return `hace ${diffInDays} día${diffInDays !== 1 ? 's' : ''}`;
+    } else {
+      return `hace ${diffInWeeks} semana${diffInWeeks !== 1 ? 's' : ''}`;
+    }
+  };
+
+  // useEffect para scroll automático cuando cambian los mensajes
+  useEffect(() => {
+    if (messages.length > 0) {
+      // Usar setTimeout para asegurar que el DOM se actualice antes del scroll
+      setTimeout(() => {
+        scrollToBottom();
+      }, 100);
+    }
+  }, [messages.length]); // Solo depender de la cantidad de mensajes, no del array completo
+
   useEffect(() => {
     if (!ws || !isConnected) return;
+    
+    // Solo cargar conversaciones una vez al conectar
     loadConversations();
     
     // Configurar listeners para eventos en tiempo real
@@ -71,20 +116,32 @@ const ChatsPage: React.FC = () => {
         console.log('ℹ️ Mensaje no es para la conversación activa, solo actualizando contador');
       }
       
-      // Actualizar el contador de mensajes no leídos para la conversación
-      setConversations(prev => prev.map(conv => {
-        if (conv.id === data.conversation_id) {
-          // Solo incrementar si no es la conversación actualmente seleccionada
-          const shouldIncrement = !selectedConversation || selectedConversation.id !== data.conversation_id;
-          console.log(`📊 Actualizando contador para conversación ${conv.id}, incrementar: ${shouldIncrement}`);
-          return {
-            ...conv,
-            unreadCount: shouldIncrement ? (conv.unreadCount || 0) + 1 : conv.unreadCount,
-            updated_at: data.message.created_at || new Date().toISOString()
-          };
-        }
-        return conv;
-      }));
+      // Actualizar el contador de mensajes no leídos para la conversación y reordenar
+      setConversations(prev => {
+        const updatedConversations = prev.map(conv => {
+          if (conv.id === data.conversation_id) {
+            // Solo incrementar si no es la conversación actualmente seleccionada
+            const shouldIncrement = !selectedConversation || selectedConversation.id !== data.conversation_id;
+            console.log(`📊 Actualizando contador para conversación ${conv.id}, incrementar: ${shouldIncrement}`);
+            return {
+              ...conv,
+              unreadCount: shouldIncrement ? (conv.unreadCount || 0) + 1 : conv.unreadCount,
+              updated_at: data.message.created_at || new Date().toISOString()
+            };
+          }
+          return conv;
+        });
+        
+        // Reordenar conversaciones: primero por mensajes no leídos, luego por fecha más reciente
+        return updatedConversations.sort((a, b) => {
+          // Primero por mensajes no leídos (descendente)
+          if ((a.unreadCount || 0) !== (b.unreadCount || 0)) {
+            return (b.unreadCount || 0) - (a.unreadCount || 0);
+          }
+          // Luego por fecha de actualización (descendente - más recientes primero)
+          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+        });
+      });
     });
     
     const unsubscribeMessageUpdated = ws.on('message_updated', (data: any) => {
@@ -119,7 +176,7 @@ const ChatsPage: React.FC = () => {
       unsubscribeMessageUpdated();
       unsubscribeMessagesRead();
     };
-  }, [ws, isConnected, selectedConversation]);
+  }, [ws, isConnected]); // Remover selectedConversation de las dependencias para evitar bucles
 
   // Función para crear conversaciones virtuales para usuarios sin conversaciones
   const createRecoveredConversations = async (usersWithoutConversations: User[]): Promise<EnrichedConversation[]> => {
@@ -268,25 +325,27 @@ const ChatsPage: React.FC = () => {
       const batchResults = await Promise.allSettled(batchPromises);
       
       // Actualizar estado con los resultados del lote
-      setConversations(prev => prev.map(conv => {
-        const result = batchResults.find(r => 
-          r.status === 'fulfilled' && r.value.id === conv.id
-        );
-        if (result && result.status === 'fulfilled') {
-          return { ...conv, unreadCount: result.value.unreadCount };
-        }
-        return conv;
-      }));
-      
-      // Reordenar después de cada lote para mostrar conversaciones con mensajes no leídos primero
-      setConversations(prev => [...prev].sort((a, b) => {
-        // Primero por mensajes no leídos (descendente)
-        if ((a.unreadCount || 0) !== (b.unreadCount || 0)) {
-          return (b.unreadCount || 0) - (a.unreadCount || 0);
-        }
-        // Luego por fecha de actualización (descendente)
-        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-      }));
+      setConversations(prev => {
+        const updatedConversations = prev.map(conv => {
+          const result = batchResults.find(r => 
+            r.status === 'fulfilled' && r.value.id === conv.id
+          );
+          if (result && result.status === 'fulfilled') {
+            return { ...conv, unreadCount: result.value.unreadCount };
+          }
+          return conv;
+        });
+        
+        // Reordenar después de cada lote: primero por mensajes no leídos, luego por fecha más reciente
+        return updatedConversations.sort((a, b) => {
+          // Primero por mensajes no leídos (descendente)
+          if ((a.unreadCount || 0) !== (b.unreadCount || 0)) {
+            return (b.unreadCount || 0) - (a.unreadCount || 0);
+          }
+          // Luego por fecha de actualización (descendente - más recientes primero)
+          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+        });
+      });
       
       // Pausa pequeña entre lotes para no sobrecargar
       if (i + batchSize < conversations.length) {
@@ -331,13 +390,28 @@ const ChatsPage: React.FC = () => {
         }
       }
       
-      console.log(`✅ Estableciendo ${messagesToShow.length} mensajes en el estado`);
+      // FUNCIONALIDAD 1: Ordenar mensajes cronológicamente (más antiguos primero, más recientes al final)
+      messagesToShow = messagesToShow.sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      
+      console.log(`✅ Estableciendo ${messagesToShow.length} mensajes ordenados en el estado`);
       setMessages(messagesToShow);
       setSelectedConversation(conversation);
       
-      // Marcar mensajes como leídos (actualizar contador)
+      // FUNCIONALIDAD 2: Marcar conversación como leída en la base de datos
+      if ((conversation.unreadCount || 0) > 0 && !conversation.isRecovered) {
+        try {
+          console.log(`👁️ Marcando conversación ${conversation.id} como leída en la base de datos...`);
+          await ws.markConversationAsRead(conversation.id);
+          console.log(`✅ Conversación marcada como leída exitosamente`);
+        } catch (error) {
+          console.error('❌ Error marcando conversación como leída:', error);
+        }
+      }
+      
+      // Actualizar el contador de no leídos en la lista local
       if ((conversation.unreadCount || 0) > 0) {
-        // Actualizar el contador de no leídos en la lista
         setConversations(prev => prev.map(conv => 
           conv.id === conversation.id 
             ? { ...conv, unreadCount: 0 }
@@ -605,133 +679,104 @@ const ChatsPage: React.FC = () => {
                   </button>
                 </div>
               </div>
-              <p className="text-sm text-gray-500 mt-1">
-                {filteredConversations.length} de {conversations.length} conversaciones
-              </p>
-            </div>
-
-            {/* Barra de búsqueda */}
-            <div className="p-4 border-b border-gray-200">
+              
+              {/* Barra de búsqueda */}
               <div className="relative">
-                <FiSearch className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <input
-                  id="search-conversations"
-                  name="searchTerm"
                   type="text"
-                  placeholder="Buscar por usuario, teléfono, email..."
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="Buscar conversaciones..."
                   value={filters.searchTerm}
                   onChange={(e) => setFilters(prev => ({ ...prev, searchTerm: e.target.value }))}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
                 />
               </div>
             </div>
 
-            {/* Panel de filtros avanzados */}
+            {/* Panel de filtros expandible */}
             {showFilters && (
               <div className="p-4 border-b border-gray-200 bg-gray-50">
                 <div className="space-y-3">
-                  {/* Filtro por plataforma */}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                      Plataforma
-                    </label>
-                    <select
-                      id="filter-platform"
-                      name="platform"
-                      value={filters.platform}
-                      onChange={(e) => setFilters(prev => ({ ...prev, platform: e.target.value }))}
-                      className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-1 focus:ring-indigo-500"
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-medium text-gray-700">Filtros</h3>
+                    <button
+                      onClick={clearFilters}
+                      className="text-xs text-indigo-600 hover:text-indigo-800"
                     >
-                      <option value="">Todas las plataformas</option>
-                      {platformOptions.map(platform => (
-                        <option key={platform} value={platform}>
-                          {platform.charAt(0).toUpperCase() + platform.slice(1)}
-                        </option>
-                      ))}
-                    </select>
+                      Limpiar filtros
+                    </button>
                   </div>
-
-                  {/* Filtro por estado */}
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                      Estado
-                    </label>
-                    <select
-                      id="filter-status"
-                      name="status"
-                      value={filters.status}
-                      onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
-                      className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-1 focus:ring-indigo-500"
-                    >
-                      <option value="">Todos los estados</option>
-                      {statusOptions.map(status => (
-                        <option key={status} value={status}>
-                          {status.charAt(0).toUpperCase() + status.slice(1)}
-                        </option>
-                      ))}
-                    </select>
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Plataforma
+                      </label>
+                      <select
+                        value={filters.platform}
+                        onChange={(e) => setFilters(prev => ({ ...prev, platform: e.target.value }))}
+                        className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="">Todas</option>
+                        {platformOptions.map(platform => (
+                          <option key={platform} value={platform}>{platform}</option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Estado
+                      </label>
+                      <select
+                        value={filters.status}
+                        onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
+                        className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="">Todos</option>
+                        {statusOptions.map(status => (
+                          <option key={status} value={status}>{status}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-
-                  {/* Filtros de fecha */}
-                  <div className="grid grid-cols-2 gap-2">
+                  
+                  <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">
                         Desde
                       </label>
                       <input
-                        id="filter-date-from"
-                        name="dateFrom"
                         type="date"
                         value={filters.dateFrom}
                         onChange={(e) => setFilters(prev => ({ ...prev, dateFrom: e.target.value }))}
-                        className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-1 focus:ring-indigo-500"
+                        className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-indigo-500 focus:border-indigo-500"
                       />
                     </div>
+                    
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">
                         Hasta
                       </label>
                       <input
-                        id="filter-date-to"
-                        name="dateTo"
                         type="date"
                         value={filters.dateTo}
                         onChange={(e) => setFilters(prev => ({ ...prev, dateTo: e.target.value }))}
-                        className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-1 focus:ring-indigo-500"
+                        className="w-full text-sm border border-gray-300 rounded-md px-2 py-1 focus:ring-indigo-500 focus:border-indigo-500"
                       />
                     </div>
                   </div>
-
-                  {/* Botón limpiar filtros */}
-                  {(filters.searchTerm || filters.platform || filters.status || filters.dateFrom || filters.dateTo) && (
-                    <button
-                      onClick={clearFilters}
-                      className="w-full text-sm text-indigo-600 hover:text-indigo-800 py-1"
-                    >
-                      <FiX className="inline h-3 w-3 mr-1" />
-                      Limpiar filtros
-                    </button>
-                  )}
                 </div>
               </div>
             )}
 
-            {/* Lista de conversaciones filtradas */}
+            {/* Lista de conversaciones */}
             <div className="flex-1 overflow-y-auto">
               {filteredConversations.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                <div className="flex flex-col items-center justify-center h-64 text-gray-500">
                   <FiMessageCircle className="h-12 w-12 mb-4" />
-                  <p className="text-center">
-                    {conversations.length === 0 ? 'No hay conversaciones' : 'No se encontraron conversaciones con los filtros aplicados'}
-                  </p>
-                  {conversations.length > 0 && (
-                    <button
-                      onClick={clearFilters}
-                      className="mt-2 text-sm text-indigo-600 hover:text-indigo-800"
-                    >
-                      Limpiar filtros
-                    </button>
-                  )}
+                  <p className="text-lg font-medium">No hay conversaciones</p>
+                  <p className="text-sm">Las conversaciones aparecerán aquí cuando lleguen mensajes</p>
                 </div>
               ) : (
                 <div className="divide-y divide-gray-200">
@@ -740,58 +785,109 @@ const ChatsPage: React.FC = () => {
                       key={conversation.id}
                       onClick={() => loadMessages(conversation)}
                       className={clsx(
-                        'p-4 hover:bg-gray-50 cursor-pointer',
-                        selectedConversation?.id === conversation.id ? 'bg-indigo-50 border-r-2 border-indigo-500' : ''
+                        'p-4 cursor-pointer hover:bg-gray-50 transition-colors',
+                        selectedConversation?.id === conversation.id && 'bg-indigo-50 border-r-2 border-indigo-500'
                       )}
                     >
-                      <div className="flex items-center space-x-3">
-                        <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center">
-                          <FiUser className="h-5 w-5 text-indigo-600" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center space-x-2">
-                            <p className={clsx(
-                              "text-sm truncate",
-                              (conversation.unreadCount || 0) > 0 ? "font-bold text-gray-900" : "font-medium text-gray-900"
-                            )}>
-                              {conversation.user?.full_name || 'Usuario sin nombre'}
-                            </p>
-                            {/* Badge de mensajes no leídos */}
-                            {(conversation.unreadCount || 0) > 0 && (
-                              <span className="inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white bg-red-500 rounded-full">
-                                {conversation.unreadCount}
-                              </span>
-                            )}
-                            {/* Badge de conversación recuperada */}
-                            {conversation.isRecovered && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
-                                Recuperada
-                              </span>
-                            )}
+                      <div className="flex items-start space-x-3">
+                        <div className="flex-shrink-0">
+                          <div className="w-10 h-10 bg-gray-300 rounded-full flex items-center justify-center">
+                            <FiUser className="h-5 w-5 text-gray-600" />
                           </div>
-                          <p className="text-xs text-gray-500 truncate">
-                            {conversation.user?.phone}
-                          </p>
-                          <div className="flex items-center space-x-2 mt-1">
+                        </div>
+                        
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {conversation.user?.full_name || 'Usuario desconocido'}
+                            </p>
+                            <div className="flex items-center space-x-2">
+                              {(conversation.unreadCount || 0) > 0 && (
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                  {conversation.unreadCount}
+                                </span>
+                              )}
+                              <span className="text-xs text-gray-500">
+                                {formatSpecificTime(conversation.updated_at)}
+                              </span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center justify-between mt-1">
+                            <p className="text-sm text-gray-600 truncate">
+                              {conversation.user?.email || conversation.user?.phone || 'Sin contacto'}
+                            </p>
+                            <div className="flex items-center space-x-1">
+                              {conversation.isRecovered && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                                  Recuperada
+                                </span>
+                              )}
+                              <span className={clsx(
+                                'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
+                                conversation.platform === 'whatsapp' && 'bg-green-100 text-green-800',
+                                conversation.platform === 'telegram' && 'bg-blue-100 text-blue-800',
+                                conversation.platform === 'instagram' && 'bg-pink-100 text-pink-800',
+                                conversation.platform === 'facebook' && 'bg-blue-100 text-blue-800',
+                                conversation.platform === 'recovered' && 'bg-yellow-100 text-yellow-800',
+                                !['whatsapp', 'telegram', 'instagram', 'facebook', 'recovered'].includes(conversation.platform) && 'bg-gray-100 text-gray-800'
+                              )}>
+                                {conversation.platform}
+                              </span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center justify-between mt-2">
                             <span className={clsx(
-                              'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-                              conversation.status === 'active' ? 'bg-green-100 text-green-800' : 
-                              conversation.status === 'recovered' ? 'bg-orange-100 text-orange-800' :
-                              'bg-gray-100 text-gray-800'
+                              'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
+                              conversation.status === 'active' && 'bg-green-100 text-green-800',
+                              conversation.status === 'pending' && 'bg-yellow-100 text-yellow-800',
+                              conversation.status === 'closed' && 'bg-gray-100 text-gray-800',
+                              conversation.status === 'recovered' && 'bg-yellow-100 text-yellow-800'
                             )}>
                               {conversation.status}
                             </span>
-                            <span className="text-xs text-gray-400">
-                              {conversation.platform}
-                            </span>
+                            
+                            <div className="flex items-center space-x-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleAgentStatus(conversation.id, !conversation.agent_enabled);
+                                }}
+                                className={clsx(
+                                  'p-1 rounded transition-colors',
+                                  conversation.agent_enabled 
+                                    ? 'text-green-600 hover:text-green-800' 
+                                    : 'text-gray-400 hover:text-gray-600'
+                                )}
+                                title={conversation.agent_enabled ? 'Desactivar agente IA' : 'Activar agente IA'}
+                              >
+                                <FiCpu className="h-4 w-4" />
+                              </button>
+                              
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  getConversationDetails(conversation.id);
+                                }}
+                                className="p-1 rounded text-gray-400 hover:text-gray-600 transition-colors"
+                                title="Ver detalles"
+                              >
+                                <FiInfo className="h-4 w-4" />
+                              </button>
+                              
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  archiveConversation(conversation.id);
+                                }}
+                                className="p-1 rounded text-gray-400 hover:text-red-600 transition-colors"
+                                title="Archivar conversación"
+                              >
+                                <FiArchive className="h-4 w-4" />
+                              </button>
+                            </div>
                           </div>
-                          {/* Timestamp relativo */}
-                          <p className="text-xs text-gray-400 mt-1">
-                            {formatDistanceToNow(new Date(conversation.updated_at), { 
-                              addSuffix: true, 
-                              locale: es 
-                            })}
-                          </p>
                         </div>
                       </div>
                     </div>
@@ -801,7 +897,7 @@ const ChatsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Chat principal */}
+          {/* Panel de chat */}
           <div className="flex-1 flex flex-col">
             {selectedConversation ? (
               <>
@@ -809,136 +905,107 @@ const ChatsPage: React.FC = () => {
                 <div className="p-4 border-b border-gray-200 bg-white">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-3">
-                      <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center">
-                        <FiUser className="h-4 w-4 text-indigo-600" />
+                      <div className="w-10 h-10 bg-gray-300 rounded-full flex items-center justify-center">
+                        <FiUser className="h-5 w-5 text-gray-600" />
                       </div>
                       <div>
-                        <h3 className="text-sm font-medium text-gray-900">
-                          {selectedConversation.user?.full_name || 'Usuario sin nombre'}
+                        <h3 className="text-lg font-medium text-gray-900">
+                          {selectedConversation.user?.full_name || 'Usuario desconocido'}
                         </h3>
-                        <p className="text-xs text-gray-500">
-                          {selectedConversation.user?.phone}
+                        <p className="text-sm text-gray-500">
+                          {selectedConversation.user?.email || selectedConversation.user?.phone || 'Sin contacto'}
                         </p>
                       </div>
                     </div>
                     
-                    {/* Controles de conversación */}
                     <div className="flex items-center space-x-2">
-                      {/* Toggle Agente IA */}
-                      {!selectedConversation.isRecovered && (
-                        <button
-                          onClick={() => toggleAgentStatus(selectedConversation.id, !selectedConversation.agent_enabled)}
-                          className={clsx(
-                            'inline-flex items-center px-3 py-1 rounded-md text-xs font-medium transition-colors',
-                            selectedConversation.agent_enabled
-                              ? 'bg-green-100 text-green-800 hover:bg-green-200'
-                              : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
-                          )}
-                          title={selectedConversation.agent_enabled ? 'Desactivar Agente IA' : 'Activar Agente IA'}
-                        >
-                          <FiCpu className="h-3 w-3 mr-1" />
-                          {selectedConversation.agent_enabled ? 'IA Activa' : 'IA Inactiva'}
-                        </button>
-                      )}
+                      <span className={clsx(
+                        'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
+                        selectedConversation.platform === 'whatsapp' && 'bg-green-100 text-green-800',
+                        selectedConversation.platform === 'telegram' && 'bg-blue-100 text-blue-800',
+                        selectedConversation.platform === 'instagram' && 'bg-pink-100 text-pink-800',
+                        selectedConversation.platform === 'facebook' && 'bg-blue-100 text-blue-800',
+                        selectedConversation.platform === 'recovered' && 'bg-yellow-100 text-yellow-800',
+                        !['whatsapp', 'telegram', 'instagram', 'facebook', 'recovered'].includes(selectedConversation.platform) && 'bg-gray-100 text-gray-800'
+                      )}>
+                        {selectedConversation.platform}
+                      </span>
                       
-                      {/* Botón refrescar mensajes */}
                       <button
-                        onClick={() => {
-                          console.log('🔄 Refrescando mensajes manualmente...');
-                          loadMessages(selectedConversation);
-                        }}
-                        className="p-2 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100"
-                        title="Refrescar mensajes"
+                        onClick={() => toggleAgentStatus(selectedConversation.id, !selectedConversation.agent_enabled)}
+                        className={clsx(
+                          'p-2 rounded-md transition-colors',
+                          selectedConversation.agent_enabled 
+                            ? 'bg-green-100 text-green-600 hover:bg-green-200' 
+                            : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                        )}
+                        title={selectedConversation.agent_enabled ? 'Desactivar agente IA' : 'Activar agente IA'}
                       >
-                        <FiRefreshCw className="h-4 w-4" />
+                        <FiCpu className="h-5 w-5" />
                       </button>
-                      
-                      {/* Botón de información */}
-                      <button
-                        onClick={() => getConversationDetails(selectedConversation.id)}
-                        className="p-2 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100"
-                        title="Ver detalles de conversación"
-                      >
-                        <FiInfo className="h-4 w-4" />
-                      </button>
-                      
-                      {/* Botón archivar */}
-                      {!selectedConversation.isRecovered && (
-                        <button
-                          onClick={() => {
-                            if (confirm('¿Estás seguro de que quieres archivar esta conversación?')) {
-                              archiveConversation(selectedConversation.id);
-                            }
-                          }}
-                          className="p-2 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50"
-                          title="Archivar conversación"
-                        >
-                          <FiArchive className="h-4 w-4" />
-                        </button>
-                      )}
                     </div>
-                  </div>
-                  
-                  {/* Información adicional de la conversación */}
-                  <div className="mt-2 flex items-center space-x-4 text-xs text-gray-500">
-                    <span>Plataforma: {selectedConversation.platform}</span>
-                    <span>Estado: {selectedConversation.status}</span>
-                    {selectedConversation.isRecovered && (
-                      <span className="text-orange-600">Conversación recuperada</span>
-                    )}
-                    {selectedConversation.agent_enabled && (
-                      <span className="text-green-600">🤖 Agente IA activo</span>
-                    )}
                   </div>
                 </div>
 
                 {/* Mensajes */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {messages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={clsx(
-                        'flex',
-                        message.role === 'user' ? 'justify-end' : 'justify-start'
-                      )}
-                    >
-                      <div
-                        className={clsx(
-                          'max-w-xs lg:max-w-md px-4 py-2 rounded-lg',
-                          message.role === 'user'
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-gray-100 text-gray-900'
-                        )}
-                      >
-                        <p className="text-sm">{message.content}</p>
-                        <p className={clsx(
-                          'text-xs mt-1',
-                          message.role === 'user' ? 'text-indigo-200' : 'text-gray-500'
-                        )}>
-                          {format(new Date(message.created_at), 'HH:mm')}
-                        </p>
+                  {messages.length === 0 ? (
+                    <div className="flex items-center justify-center h-full text-gray-500">
+                      <div className="text-center">
+                        <FiMessageCircle className="h-12 w-12 mx-auto mb-4" />
+                        <p className="text-lg font-medium">No hay mensajes</p>
+                        <p className="text-sm">Inicia la conversación enviando un mensaje</p>
                       </div>
                     </div>
-                  ))}
+                  ) : (
+                    <>
+                      {messages.map((message) => (
+                        <div
+                          key={message.id}
+                          className={clsx(
+                            'flex',
+                            message.role === 'user' ? 'justify-end' : 'justify-start'
+                          )}
+                        >
+                          <div
+                            className={clsx(
+                              'max-w-xs lg:max-w-md px-4 py-2 rounded-lg',
+                              message.role === 'user'
+                                ? 'bg-indigo-600 text-white'
+                                : 'bg-gray-200 text-gray-900'
+                            )}
+                          >
+                            <p className="text-sm">{message.content}</p>
+                            <p className={clsx(
+                              'text-xs mt-1',
+                              message.role === 'user' ? 'text-indigo-200' : 'text-gray-500'
+                            )}>
+                              {format(new Date(message.created_at), 'HH:mm', { locale: es })}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                      {/* Elemento para scroll automático */}
+                      <div ref={messagesEndRef} />
+                    </>
+                  )}
                 </div>
 
-                {/* Input de mensaje */}
-                <div className="p-4 border-t border-gray-200">
+                {/* Input para nuevo mensaje */}
+                <div className="p-4 border-t border-gray-200 bg-white">
                   <div className="flex space-x-2">
                     <input
-                      id="new-message-input"
-                      name="newMessage"
                       type="text"
-                      placeholder="Escribe un mensaje..."
-                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                       value={newMessage}
                       onChange={(e) => setNewMessage(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                      placeholder="Escribe un mensaje..."
+                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:ring-indigo-500 focus:border-indigo-500"
                     />
                     <button
                       onClick={sendMessage}
                       disabled={!newMessage.trim()}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                       <FiSend className="h-4 w-4" />
                     </button>
@@ -946,10 +1013,11 @@ const ChatsPage: React.FC = () => {
                 </div>
               </>
             ) : (
-              <div className="flex items-center justify-center h-full text-gray-500">
+              <div className="flex-1 flex items-center justify-center text-gray-500">
                 <div className="text-center">
-                  <FiMessageCircle className="h-12 w-12 mx-auto mb-4" />
-                  <p className="text-lg font-medium">Selecciona una conversación</p>
+                  <FiMessageCircle className="h-16 w-16 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium mb-2">Selecciona una conversación</h3>
+                  <p className="text-sm">Elige una conversación de la lista para ver los mensajes</p>
                 </div>
               </div>
             )}

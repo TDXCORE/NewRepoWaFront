@@ -455,6 +455,10 @@ class WebSocketService {
     return this.send('conversations', 'archive_conversation', { conversation_id: conversationId });
   }
 
+  async markConversationAsRead(conversationId: string): Promise<any> {
+    return this.send('conversations', 'mark_as_read', { conversation_id: conversationId });
+  }
+
   // API de Meetings
   async getAllMeetings(filter: string = 'all', status?: string, limit: number = 50, offset: number = 0): Promise<any> {
     return this.send('meetings', 'get_all_meetings', { 
