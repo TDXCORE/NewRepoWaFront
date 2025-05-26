@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import MainLayout from '../components/Layout/MainLayout';
 import { useWebSocket } from '../contexts/WebSocketContext';
-import { FiCalendar, FiClock, FiPlus, FiRefreshCw, FiUser, FiVideo } from 'react-icons/fi';
+import { FiCalendar, FiClock, FiPlus, FiRefreshCw, FiUser, FiVideo, FiMessageCircle } from 'react-icons/fi';
 import { format, startOfMonth, endOfMonth, addDays, isSameDay, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { useRouter } from 'next/router';
 
 interface Meeting {
   id: string;
@@ -24,6 +25,7 @@ interface Meeting {
 
 const CalendarPage: React.FC = () => {
   const { ws, isConnected } = useWebSocket();
+  const router = useRouter();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [calendarView, setCalendarView] = useState<{ [key: string]: Meeting[] }>({});
@@ -158,6 +160,10 @@ const CalendarPage: React.FC = () => {
       case 'cancelled': return 'Cancelada';
       default: return status;
     }
+  };
+
+  const handleViewConversation = (userId: string) => {
+    router.push(`/chats?user=${userId}`);
   };
 
   if (loading) {
@@ -449,6 +455,21 @@ const CalendarPage: React.FC = () => {
                         <p className="text-xs text-gray-500">
                           {format(parseISO(meeting.start_time), 'dd/MM/yyyy HH:mm', { locale: es })}
                         </p>
+                        {meeting.users && (
+                          <div className="flex items-center mt-1 space-x-2">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                              <FiUser className="h-3 w-3 mr-1" />
+                              {meeting.users.full_name || meeting.users.email || meeting.users.phone}
+                            </span>
+                            <button
+                              onClick={() => handleViewConversation(meeting.users?.email || '')}
+                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200"
+                            >
+                              <FiMessageCircle className="h-3 w-3 mr-1" />
+                              Ver conversación
+                            </button>
+                          </div>
+                        )}
                       </div>
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(meeting.status)}`}>
                         {getStatusLabel(meeting.status)}
