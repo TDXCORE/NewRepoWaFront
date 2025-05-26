@@ -181,15 +181,15 @@ const CalendarPage: React.FC = () => {
   return (
     <MainLayout>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Calendario de Reuniones</h1>
+        <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between">
+          <div className="mb-4 sm:mb-0">
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Calendario de Reuniones</h1>
             <p className="mt-1 text-sm text-gray-600">
               Gestiona las reuniones programadas ({stats.totalMeetings} reuniones totales)
             </p>
           </div>
           
-          <div className="flex items-center space-x-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center space-y-2 sm:space-y-0 sm:space-x-3">
             {/* Filtros */}
             <select
               value={selectedFilter}
@@ -222,9 +222,9 @@ const CalendarPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
           {/* Vista principal del calendario */}
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2 order-1">
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-lg font-medium text-gray-900">
@@ -371,7 +371,7 @@ const CalendarPage: React.FC = () => {
           </div>
 
           {/* Panel lateral */}
-          <div className="space-y-6">
+          <div className="space-y-4 lg:space-y-6 order-2">
             {/* Reuniones del día seleccionado */}
             <div className="bg-white rounded-lg shadow">
               <div className="px-6 py-4 border-b border-gray-200">
@@ -439,12 +439,33 @@ const CalendarPage: React.FC = () => {
                   Reuniones Recientes
                 </h3>
                 <p className="text-sm text-gray-500">
-                  {meetings.length} reuniones ordenadas por fecha
+                  Todas las reuniones disponibles ordenadas por fecha de ejecución
                 </p>
               </div>
               <div className="divide-y divide-gray-200 max-h-64 overflow-y-auto">
                 {meetings
-                  .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+                  .sort((a, b) => {
+                    const dateA = new Date(a.start_time);
+                    const dateB = new Date(b.start_time);
+                    const now = new Date();
+                    
+                    // Separar reuniones futuras y pasadas
+                    const aIsFuture = dateA >= now;
+                    const bIsFuture = dateB >= now;
+                    
+                    // Si ambas son futuras, mostrar las más próximas primero
+                    if (aIsFuture && bIsFuture) {
+                      return dateA.getTime() - dateB.getTime();
+                    }
+                    
+                    // Si ambas son pasadas, mostrar las más recientes primero
+                    if (!aIsFuture && !bIsFuture) {
+                      return dateB.getTime() - dateA.getTime();
+                    }
+                    
+                    // Las futuras van antes que las pasadas
+                    return aIsFuture ? -1 : 1;
+                  })
                   .map((meeting) => (
                   <div key={meeting.id} className="px-6 py-3">
                     <div className="flex items-center justify-between">

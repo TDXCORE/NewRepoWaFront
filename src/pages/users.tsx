@@ -286,15 +286,15 @@ const UsersPage: React.FC = () => {
   return (
     <MainLayout>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Gestión de Usuarios</h1>
+        <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between">
+          <div className="mb-4 sm:mb-0">
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Gestión de Usuarios</h1>
             <p className="mt-1 text-sm text-gray-600">
-              Administra los usuarios del sistema ({stats.totalUsers} usuarios totales)
+              Administra los usuarios del sistema ({users.length} usuarios totales)
             </p>
           </div>
           
-          <div className="flex items-center space-x-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center space-y-2 sm:space-y-0 sm:space-x-3">
             <button
               onClick={() => setShowFilters(!showFilters)}
               className={clsx(
@@ -391,9 +391,9 @@ const UsersPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex h-[calc(100vh-16rem)] bg-white rounded-lg shadow overflow-hidden">
+        <div className="flex flex-col lg:flex-row h-[calc(100vh-16rem)] bg-white rounded-lg shadow overflow-hidden">
           {/* Lista de usuarios */}
-          <div className="w-1/2 border-r border-gray-200 flex flex-col">
+          <div className="w-full lg:w-1/2 border-r-0 lg:border-r border-gray-200 flex flex-col">
             {/* Header con búsqueda */}
             <div className="p-4 border-b border-gray-200">
               <div className="relative">

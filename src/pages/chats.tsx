@@ -32,6 +32,7 @@ const ChatsPage: React.FC = () => {
   const [conversationMessages, setConversationMessages] = useState<{ [key: string]: Message[] }>({});
   const [loadingStats, setLoadingStats] = useState({ usersTotal: 0, conversationsTotal: 0, usersWithoutConversations: 0 });
   const [showDiagnostic, setShowDiagnostic] = useState(false);
+  const [showMobileChat, setShowMobileChat] = useState(false);
   
   // Referencia para scroll automático
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -620,6 +621,9 @@ const ChatsPage: React.FC = () => {
       // Establecer conversación seleccionada inmediatamente para prevenir múltiples cargas
       setSelectedConversation(conversation);
       
+      // En móvil, mostrar el chat cuando se selecciona una conversación
+      setShowMobileChat(true);
+      
       let messagesToShow: Message[] = [];
       
       if (conversation.isRecovered) {
@@ -944,7 +948,11 @@ const ChatsPage: React.FC = () => {
         
         <div className="flex h-[calc(100vh-8rem)] bg-white rounded-lg shadow overflow-hidden">
           {/* Lista de conversaciones */}
-          <div className="w-1/3 border-r border-gray-200 flex flex-col">
+          <div className={clsx(
+            "border-r border-gray-200 flex flex-col",
+            "w-full md:w-1/3",
+            showMobileChat && "hidden md:flex"
+          )}>
             {/* Header con título y botón de filtros */}
             <div className="p-4 border-b border-gray-200">
               <div className="flex items-center justify-between">
@@ -1187,13 +1195,24 @@ const ChatsPage: React.FC = () => {
           </div>
 
           {/* Panel de chat */}
-          <div className="flex-1 flex flex-col">
+          <div className={clsx(
+            "flex-1 flex flex-col",
+            !showMobileChat && "hidden md:flex"
+          )}>
             {selectedConversation ? (
               <>
                 {/* Header del chat */}
                 <div className="p-4 border-b border-gray-200 bg-white">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-3">
+                      {/* Botón volver para móvil */}
+                      <button
+                        onClick={() => setShowMobileChat(false)}
+                        className="md:hidden p-2 rounded-md text-gray-400 hover:text-gray-600 transition-colors"
+                        title="Volver a conversaciones"
+                      >
+                        <FiX className="h-5 w-5" />
+                      </button>
                       <div className="w-10 h-10 bg-gray-300 rounded-full flex items-center justify-center">
                         <FiUser className="h-5 w-5 text-gray-600" />
                       </div>

@@ -15,18 +15,19 @@ const Dashboard: React.FC = () => {
   });
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [initialLoad, setInitialLoad] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
 
   useEffect(() => {
     if (!ws || !isConnected) return;
     loadRealDashboardData();
     
-    // Actualizar datos cada 30 segundos
+    // Actualizar datos cada 5 minutos
     const interval = setInterval(() => {
       if (ws && isConnected) {
         loadRealDashboardData();
       }
-    }, 30000);
+    }, 300000);
 
     return () => clearInterval(interval);
   }, [ws, isConnected]);
@@ -39,14 +40,16 @@ const Dashboard: React.FC = () => {
     }
     
     try {
-      setLoading(true);
+      if (initialLoad) {
+        setLoading(true);
+      }
       console.log('🔄 Cargando datos reales básicos del dashboard...');
       
       // Cargar datos básicos en paralelo usando las funciones que sabemos que existen
       const [usersData, conversationsData, meetingsData] = await Promise.allSettled([
         ws.getUsers(),
         ws.getConversations(),
-        ws.getAllMeetings('all', '', 100, 0)
+        ws.getAllMeetings('all', '', 200, 0)
       ]);
 
       let totalUsers = 0;
@@ -62,7 +65,7 @@ const Dashboard: React.FC = () => {
         console.log(`👥 Total usuarios: ${totalUsers}`);
         
         // Agregar usuarios recientes a la actividad
-        users.slice(0, 5).forEach(user => {
+        users.slice(0, 50).forEach(user => {
           activity.push({
             type: 'new_user',
             timestamp: user.created_at,
@@ -83,7 +86,7 @@ const Dashboard: React.FC = () => {
         console.log(`💬 Conversaciones activas: ${activeConversations}`);
         
         // Contar mensajes no leídos y agregar actividad
-        for (const conv of conversations.slice(0, 10)) {
+        for (const conv of conversations.slice(0, 50)) {
           try {
             const messagesData = await ws.getMessages(conv.id);
             const messages = messagesData.messages || [];
@@ -118,13 +121,15 @@ const Dashboard: React.FC = () => {
         console.log(`📅 Total reuniones: ${totalMeetings}`);
         
         // Agregar reuniones recientes a la actividad
-        meetings.slice(0, 5).forEach((meeting: any) => {
+        meetings.slice(0, 50).forEach((meeting: any) => {
           activity.push({
-            type: 'new_meeting',
+            type: 'scheduled_meeting',
             timestamp: meeting.created_at,
             data: {
               full_name: meeting.users?.full_name || 'Usuario',
-              subject: meeting.subject
+              subject: meeting.subject,
+              status: meeting.status,
+              meeting_time: meeting.start_time
             }
           });
         });
@@ -140,10 +145,18 @@ const Dashboard: React.FC = () => {
         unreadMessages
       });
 
-      // Ordenar actividad por fecha (más reciente primero) y tomar las primeras 10
+      // Filtrar actividades de los últimos 30 días
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      // Ordenar actividad por fecha (más reciente primero) y filtrar por fecha reciente
       const sortedActivity = activity
+        .filter(item => {
+          const itemDate = new Date(item.timestamp);
+          return itemDate >= thirtyDaysAgo && !isNaN(itemDate.getTime());
+        })
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-        .slice(0, 10);
+        .slice(0, 200);
       
       setRecentActivity(sortedActivity);
       setLastUpdate(new Date());
@@ -160,6 +173,9 @@ const Dashboard: React.FC = () => {
       console.error('❌ Error general cargando datos del dashboard:', error);
     } finally {
       setLoading(false);
+      if (initialLoad) {
+        setInitialLoad(false);
+      }
     }
   };
 
@@ -168,6 +184,7 @@ const Dashboard: React.FC = () => {
       case 'new_user': return '👤';
       case 'new_message': return '💬';
       case 'new_meeting': return '📅';
+      case 'scheduled_meeting': return '📅';
       default: return '📋';
     }
   };
@@ -177,6 +194,7 @@ const Dashboard: React.FC = () => {
       case 'new_user': return 'Nuevo usuario';
       case 'new_message': return 'Nuevo mensaje';
       case 'new_meeting': return 'Nueva reunión';
+      case 'scheduled_meeting': return 'Reunión agendada';
       default: return 'Actividad';
     }
   };
@@ -225,16 +243,16 @@ const Dashboard: React.FC = () => {
   return (
     <MainLayout>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-            <p className="mt-2 text-sm text-gray-600">
+        <div className="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between">
+          <div className="mb-4 sm:mb-0">
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
+            <p className="mt-1 sm:mt-2 text-sm text-gray-600">
               Resumen de actividad y métricas clave del sistema
             </p>
           </div>
           
           <div className="flex items-center space-x-2">
-            <span className="text-sm font-medium text-gray-700">Período:</span>
+            <span className="text-sm font-medium text-gray-700 hidden sm:inline">Período:</span>
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
               Tiempo Real
             </span>
@@ -242,7 +260,7 @@ const Dashboard: React.FC = () => {
         </div>
 
         {/* Tarjetas de estadísticas */}
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6 sm:mb-8">
           {statCards.map((card) => (
             <div key={card.name} className="relative bg-white pt-5 px-4 pb-12 sm:pt-6 sm:px-6 shadow rounded-lg overflow-hidden">
               <dt>
@@ -307,6 +325,21 @@ const Dashboard: React.FC = () => {
                                 <p className="text-xs text-gray-500 mt-1">
                                   {activity.data.subject}
                                 </p>
+                              )}
+                              {activity.data?.meeting_time && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Programada para: {format(new Date(activity.data.meeting_time), 'dd/MM/yyyy HH:mm', { locale: es })}
+                                </p>
+                              )}
+                              {activity.data?.status && (
+                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ml-2 ${
+                                  activity.data.status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
+                                  activity.data.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                  'bg-red-100 text-red-800'
+                                }`}>
+                                  {activity.data.status === 'scheduled' ? 'Programada' :
+                                   activity.data.status === 'completed' ? 'Completada' : 'Cancelada'}
+                                </span>
                               )}
                             </div>
                             <div className="text-right text-sm whitespace-nowrap text-gray-500">
