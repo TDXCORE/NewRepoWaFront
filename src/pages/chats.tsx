@@ -94,39 +94,73 @@ const ChatsPage: React.FC = () => {
     // Configurar listeners para eventos en tiempo real
     console.log('🎧 Configurando listeners de eventos en tiempo real...');
     
-    // Listener genérico para capturar TODOS los eventos
-    const unsubscribeAllEvents = ws.on('*', (data: any) => {
-      console.log('🌐 EVENTO GENÉRICO RECIBIDO:', data);
+    // Listener genérico para capturar TODOS los eventos y debugging
+    const unsubscribeAllEvents = ws.on('*', (eventData: any) => {
+      console.log('🌐 EVENTO GENÉRICO RECIBIDO:', eventData);
+      console.log('🔍 Tipo de evento:', eventData?.type);
+      console.log('🔍 Payload:', eventData?.payload);
     });
     
-    const unsubscribeNewMessage = ws.on('new_message', (data: any) => {
-      console.log('🔔 EVENTO: Nuevo mensaje recibido:', data);
+    // Listener para nuevos mensajes - CORREGIDO para estructura del backend
+    const unsubscribeNewMessage = ws.on('new_message', (eventData: any) => {
+      console.log('🔔 EVENTO: Nuevo mensaje recibido (estructura completa):', eventData);
+      
+      // Extraer datos de la estructura del backend: eventData.payload.data
+      const data = eventData?.payload?.data || eventData;
+      const conversationId = data?.conversation_id;
+      const message = data?.message;
+      
+      console.log('🔍 Datos extraídos:');
+      console.log('   - conversationId:', conversationId);
+      console.log('   - message:', message);
       console.log('🔍 Conversación seleccionada actual:', selectedConversation?.id);
-      console.log('🔍 ID de conversación del mensaje:', data.conversation_id);
+      
+      if (!conversationId || !message) {
+        console.log('❌ Datos incompletos en evento new_message');
+        return;
+      }
       
       // Si el mensaje es para la conversación actualmente seleccionada, agregarlo
-      if (selectedConversation && data.conversation_id === selectedConversation.id) {
-        console.log('✅ Agregando mensaje a la conversación activa');
-        setMessages(prev => {
-          const newMessages = [...prev, data.message];
-          console.log(`📨 Total mensajes después de agregar: ${newMessages.length}`);
-          return newMessages;
-        });
-      } else {
-        console.log('ℹ️ Mensaje no es para la conversación activa, solo actualizando contador');
-      }
+      // Usar callback para obtener el estado más reciente de selectedConversation
+      setSelectedConversation(currentSelected => {
+        if (currentSelected && conversationId === currentSelected.id) {
+          console.log('✅ Agregando mensaje a la conversación activa');
+          setMessages(prev => {
+            // Verificar que el mensaje no esté duplicado
+            const messageExists = prev.some(msg => msg.id === message.id);
+            if (messageExists) {
+              console.log('⚠️ Mensaje ya existe, no agregando duplicado');
+              return prev;
+            }
+            
+            const newMessages = [...prev, message].sort((a, b) => 
+              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+            console.log(`📨 Total mensajes después de agregar: ${newMessages.length}`);
+            return newMessages;
+          });
+        } else {
+          console.log('ℹ️ Mensaje no es para la conversación activa, solo actualizando contador');
+        }
+        return currentSelected; // Retornar el estado sin cambios
+      });
       
       // Actualizar el contador de mensajes no leídos para la conversación y reordenar
       setConversations(prev => {
         const updatedConversations = prev.map(conv => {
-          if (conv.id === data.conversation_id) {
+          if (conv.id === conversationId) {
             // Solo incrementar si no es la conversación actualmente seleccionada
-            const shouldIncrement = !selectedConversation || selectedConversation.id !== data.conversation_id;
+            // Usar callback para obtener el estado más reciente
+            let shouldIncrement = true;
+            setSelectedConversation(currentSelected => {
+              shouldIncrement = !currentSelected || currentSelected.id !== conversationId;
+              return currentSelected; // Retornar sin cambios
+            });
             console.log(`📊 Actualizando contador para conversación ${conv.id}, incrementar: ${shouldIncrement}`);
             return {
               ...conv,
               unreadCount: shouldIncrement ? (conv.unreadCount || 0) + 1 : conv.unreadCount,
-              updated_at: data.message.created_at || new Date().toISOString()
+              updated_at: message.created_at || new Date().toISOString()
             };
           }
           return conv;
@@ -144,28 +178,223 @@ const ChatsPage: React.FC = () => {
       });
     });
     
-    const unsubscribeMessageUpdated = ws.on('message_updated', (data: any) => {
-      console.log('📝 Mensaje actualizado:', data);
+    // Listener para mensajes actualizados - CORREGIDO
+    const unsubscribeMessageUpdated = ws.on('message_updated', (eventData: any) => {
+      console.log('📝 EVENTO: Mensaje actualizado (estructura completa):', eventData);
+      
+      const data = eventData?.payload?.data || eventData;
+      const conversationId = data?.conversation_id;
+      const messageId = data?.message_id;
+      const message = data?.message;
+      
+      console.log('🔍 Datos extraídos:');
+      console.log('   - conversationId:', conversationId);
+      console.log('   - messageId:', messageId);
+      console.log('   - message:', message);
+      
+      if (!conversationId || !messageId) {
+        console.log('❌ Datos incompletos en evento message_updated');
+        return;
+      }
       
       // Si es para la conversación actualmente seleccionada, actualizar el mensaje
-      if (selectedConversation && data.conversation_id === selectedConversation.id) {
+      if (selectedConversation && conversationId === selectedConversation.id) {
+        console.log('✅ Actualizando mensaje en conversación activa');
         setMessages(prev => prev.map(msg => 
-          msg.id === data.message_id ? { ...msg, ...data.message } : msg
+          msg.id === messageId ? { ...msg, ...message } : msg
         ));
       }
     });
     
-    const unsubscribeMessagesRead = ws.on('messages_read', (data: any) => {
-      console.log('👁️ Mensajes marcados como leídos:', data);
+    // Listener para mensajes marcados como leídos - CORREGIDO
+    const unsubscribeMessagesRead = ws.on('messages_read', (eventData: any) => {
+      console.log('👁️ EVENTO: Mensajes marcados como leídos (estructura completa):', eventData);
+      
+      const data = eventData?.payload?.data || eventData;
+      const conversationId = data?.conversation_id;
+      const count = data?.count || 0;
+      
+      console.log('🔍 Datos extraídos:');
+      console.log('   - conversationId:', conversationId);
+      console.log('   - count:', count);
+      
+      if (!conversationId) {
+        console.log('❌ Datos incompletos en evento messages_read');
+        return;
+      }
+      
+      console.log('✅ Actualizando contador de mensajes no leídos');
       
       // Actualizar contador de no leídos
       setConversations(prev => prev.map(conv => 
-        conv.id === data.conversation_id ? { ...conv, unreadCount: 0 } : conv
+        conv.id === conversationId ? { ...conv, unreadCount: 0 } : conv
       ));
       
       // Si es la conversación actualmente seleccionada, marcar mensajes como leídos
-      if (selectedConversation && data.conversation_id === selectedConversation.id) {
+      if (selectedConversation && conversationId === selectedConversation.id) {
         setMessages(prev => prev.map(msg => ({ ...msg, read: true })));
+      }
+    });
+    
+    // NUEVOS LISTENERS para eventos agregados en el backend
+    
+    // Listener para agente activado/desactivado
+    const unsubscribeAgentToggled = ws.on('agent_toggled', (eventData: any) => {
+      console.log('🤖 EVENTO: Estado del agente cambiado (estructura completa):', eventData);
+      
+      const data = eventData?.payload?.data || eventData;
+      const conversationId = data?.conversation_id;
+      const agentEnabled = data?.agent_enabled;
+      const conversation = data?.conversation;
+      
+      console.log('🔍 Datos extraídos:');
+      console.log('   - conversationId:', conversationId);
+      console.log('   - agentEnabled:', agentEnabled);
+      
+      if (!conversationId || agentEnabled === undefined) {
+        console.log('❌ Datos incompletos en evento agent_toggled');
+        return;
+      }
+      
+      console.log('✅ Actualizando estado del agente en conversaciones');
+      
+      // Actualizar estado del agente en la lista de conversaciones
+      setConversations(prev => prev.map(conv => 
+        conv.id === conversationId 
+          ? { ...conv, agent_enabled: agentEnabled, ...conversation }
+          : conv
+      ));
+      
+      // Si es la conversación seleccionada, actualizar también
+      if (selectedConversation && conversationId === selectedConversation.id) {
+        setSelectedConversation(prev => prev ? { ...prev, agent_enabled: agentEnabled, ...conversation } : null);
+      }
+    });
+    
+    // Listener para nuevas conversaciones
+    const unsubscribeConversationCreated = ws.on('conversation_created', (eventData: any) => {
+      console.log('🆕 EVENTO: Nueva conversación creada (estructura completa):', eventData);
+      
+      const data = eventData?.payload?.data || eventData;
+      const conversation = data?.conversation;
+      
+      console.log('🔍 Datos extraídos:');
+      console.log('   - conversation:', conversation);
+      
+      if (!conversation) {
+        console.log('❌ Datos incompletos en evento conversation_created');
+        return;
+      }
+      
+      console.log('✅ Agregando nueva conversación a la lista');
+      
+      // Agregar nueva conversación a la lista
+      setConversations(prev => {
+        // Verificar que no esté duplicada
+        const exists = prev.some(conv => conv.id === conversation.id);
+        if (exists) {
+          console.log('⚠️ Conversación ya existe, no agregando duplicado');
+          return prev;
+        }
+        
+        const enrichedConversation: EnrichedConversation = {
+          ...conversation,
+          unreadCount: 0,
+          isRecovered: false
+        };
+        
+        const newConversations = [enrichedConversation, ...prev];
+        
+        // Reordenar
+        return newConversations.sort((a, b) => {
+          if ((a.unreadCount || 0) !== (b.unreadCount || 0)) {
+            return (b.unreadCount || 0) - (a.unreadCount || 0);
+          }
+          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+        });
+      });
+    });
+    
+    // Listener para conversaciones archivadas
+    const unsubscribeConversationArchived = ws.on('conversation_archived', (eventData: any) => {
+      console.log('📁 EVENTO: Conversación archivada (estructura completa):', eventData);
+      
+      const data = eventData?.payload?.data || eventData;
+      const conversationId = data?.conversation_id;
+      
+      console.log('🔍 Datos extraídos:');
+      console.log('   - conversationId:', conversationId);
+      
+      if (!conversationId) {
+        console.log('❌ Datos incompletos en evento conversation_archived');
+        return;
+      }
+      
+      console.log('✅ Removiendo conversación archivada de la lista');
+      
+      // Remover conversación archivada de la lista
+      setConversations(prev => prev.filter(conv => conv.id !== conversationId));
+      
+      // Si era la conversación seleccionada, limpiar selección
+      if (selectedConversation?.id === conversationId) {
+        setSelectedConversation(null);
+        setMessages([]);
+      }
+    });
+    
+    // Listener para conversaciones actualizadas
+    const unsubscribeConversationUpdated = ws.on('conversation_updated', (eventData: any) => {
+      console.log('🔄 EVENTO: Conversación actualizada (estructura completa):', eventData);
+      
+      const data = eventData?.payload?.data || eventData;
+      const conversationId = data?.conversation_id;
+      const conversation = data?.conversation;
+      
+      console.log('🔍 Datos extraídos:');
+      console.log('   - conversationId:', conversationId);
+      console.log('   - conversation:', conversation);
+      
+      if (!conversationId) {
+        console.log('❌ Datos incompletos en evento conversation_updated');
+        return;
+      }
+      
+      console.log('✅ Actualizando conversación en la lista');
+      
+      // Actualizar conversación en la lista
+      setConversations(prev => prev.map(conv => 
+        conv.id === conversationId 
+          ? { ...conv, ...conversation }
+          : conv
+      ));
+      
+      // Si es la conversación seleccionada, actualizar también
+      if (selectedConversation && conversationId === selectedConversation.id) {
+        setSelectedConversation(prev => prev ? { ...prev, ...conversation } : null);
+      }
+    });
+    
+    // Listener para mensajes eliminados
+    const unsubscribeMessageDeleted = ws.on('message_deleted', (eventData: any) => {
+      console.log('🗑️ EVENTO: Mensaje eliminado (estructura completa):', eventData);
+      
+      const data = eventData?.payload?.data || eventData;
+      const conversationId = data?.conversation_id;
+      const messageId = data?.message_id;
+      
+      console.log('🔍 Datos extraídos:');
+      console.log('   - conversationId:', conversationId);
+      console.log('   - messageId:', messageId);
+      
+      if (!conversationId || !messageId) {
+        console.log('❌ Datos incompletos en evento message_deleted');
+        return;
+      }
+      
+      // Si es para la conversación actualmente seleccionada, remover el mensaje
+      if (selectedConversation && conversationId === selectedConversation.id) {
+        console.log('✅ Removiendo mensaje eliminado de conversación activa');
+        setMessages(prev => prev.filter(msg => msg.id !== messageId));
       }
     });
     
@@ -175,8 +404,13 @@ const ChatsPage: React.FC = () => {
       unsubscribeNewMessage();
       unsubscribeMessageUpdated();
       unsubscribeMessagesRead();
+      unsubscribeAgentToggled();
+      unsubscribeConversationCreated();
+      unsubscribeConversationArchived();
+      unsubscribeConversationUpdated();
+      unsubscribeMessageDeleted();
     };
-  }, [ws, isConnected]); // Remover selectedConversation de las dependencias para evitar bucles
+  }, [ws, isConnected, selectedConversation]);
 
   // Función para crear conversaciones virtuales para usuarios sin conversaciones
   const createRecoveredConversations = async (usersWithoutConversations: User[]): Promise<EnrichedConversation[]> => {
@@ -429,8 +663,7 @@ const ChatsPage: React.FC = () => {
     try {
       await ws.sendMessage(selectedConversation.id, newMessage.trim(), 'user');
       setNewMessage('');
-      // Recargar mensajes
-      loadMessages(selectedConversation);
+      // Los nuevos mensajes aparecerán automáticamente vía WebSocket
     } catch (error) {
       console.error('Error enviando mensaje:', error);
     }
