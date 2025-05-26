@@ -56,7 +56,7 @@ const CalendarPage: React.FC = () => {
       
       // Cargar reuniones y vista de calendario en paralelo
       const [meetingsData, calendarData] = await Promise.allSettled([
-        ws.getAllMeetings(selectedFilter, selectedStatus, 100, 0),
+        ws.getAllMeetings(selectedFilter, selectedStatus, 1000, 0),
         ws.getCalendarView(
           format(startOfMonth(selectedDate), 'yyyy-MM-dd'),
           format(endOfMonth(selectedDate), 'yyyy-MM-dd')
@@ -433,11 +433,13 @@ const CalendarPage: React.FC = () => {
                   Reuniones Recientes
                 </h3>
                 <p className="text-sm text-gray-500">
-                  Últimas {Math.min(meetings.length, 5)} reuniones
+                  {meetings.length} reuniones ordenadas por fecha
                 </p>
               </div>
               <div className="divide-y divide-gray-200 max-h-64 overflow-y-auto">
-                {meetings.slice(0, 5).map((meeting) => (
+                {meetings
+                  .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+                  .map((meeting) => (
                   <div key={meeting.id} className="px-6 py-3">
                     <div className="flex items-center justify-between">
                       <div className="flex-1 min-w-0">
