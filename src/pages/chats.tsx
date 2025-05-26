@@ -178,7 +178,7 @@ const ChatsPage: React.FC = () => {
       });
     });
     
-    // Listener para mensajes actualizados - CORREGIDO
+    // Listener para mensajes actualizados - CORREGIDO para evitar stale closure
     const unsubscribeMessageUpdated = ws.on('message_updated', (eventData: any) => {
       console.log('📝 EVENTO: Mensaje actualizado (estructura completa):', eventData);
       
@@ -197,13 +197,16 @@ const ChatsPage: React.FC = () => {
         return;
       }
       
-      // Si es para la conversación actualmente seleccionada, actualizar el mensaje
-      if (selectedConversation && conversationId === selectedConversation.id) {
-        console.log('✅ Actualizando mensaje en conversación activa');
-        setMessages(prev => prev.map(msg => 
-          msg.id === messageId ? { ...msg, ...message } : msg
-        ));
-      }
+      // Usar callback pattern para evitar stale closure
+      setSelectedConversation(currentSelected => {
+        if (currentSelected && conversationId === currentSelected.id) {
+          console.log('✅ Actualizando mensaje en conversación activa');
+          setMessages(prev => prev.map(msg => 
+            msg.id === messageId ? { ...msg, ...message } : msg
+          ));
+        }
+        return currentSelected; // No cambiar la conversación seleccionada
+      });
     });
     
     // Listener para mensajes marcados como leídos - CORREGIDO
@@ -230,10 +233,13 @@ const ChatsPage: React.FC = () => {
         conv.id === conversationId ? { ...conv, unreadCount: 0 } : conv
       ));
       
-      // Si es la conversación actualmente seleccionada, marcar mensajes como leídos
-      if (selectedConversation && conversationId === selectedConversation.id) {
-        setMessages(prev => prev.map(msg => ({ ...msg, read: true })));
-      }
+      // Usar callback pattern para evitar stale closure
+      setSelectedConversation(currentSelected => {
+        if (currentSelected && conversationId === currentSelected.id) {
+          setMessages(prev => prev.map(msg => ({ ...msg, read: true })));
+        }
+        return currentSelected; // No cambiar la conversación seleccionada
+      });
     });
     
     // NUEVOS LISTENERS para eventos agregados en el backend
@@ -391,11 +397,14 @@ const ChatsPage: React.FC = () => {
         return;
       }
       
-      // Si es para la conversación actualmente seleccionada, remover el mensaje
-      if (selectedConversation && conversationId === selectedConversation.id) {
-        console.log('✅ Removiendo mensaje eliminado de conversación activa');
-        setMessages(prev => prev.filter(msg => msg.id !== messageId));
-      }
+      // Usar callback pattern para evitar stale closure
+      setSelectedConversation(currentSelected => {
+        if (currentSelected && conversationId === currentSelected.id) {
+          console.log('✅ Removiendo mensaje eliminado de conversación activa');
+          setMessages(prev => prev.filter(msg => msg.id !== messageId));
+        }
+        return currentSelected; // No cambiar la conversación seleccionada
+      });
     });
     
     // Cleanup function
@@ -410,7 +419,7 @@ const ChatsPage: React.FC = () => {
       unsubscribeConversationUpdated();
       unsubscribeMessageDeleted();
     };
-  }, [ws, isConnected, selectedConversation]);
+  }, [ws, isConnected]);
 
   // Función para crear conversaciones virtuales para usuarios sin conversaciones
   const createRecoveredConversations = async (usersWithoutConversations: User[]): Promise<EnrichedConversation[]> => {
@@ -591,12 +600,25 @@ const ChatsPage: React.FC = () => {
   };
 
   const loadMessages = async (conversation: EnrichedConversation) => {
-    if (!ws) return;
+    if (!ws) {
+      console.error('❌ WebSocket no disponible para cargar mensajes');
+      return;
+    }
+
+    // Prevenir múltiples cargas simultáneas de la misma conversación
+    if (selectedConversation?.id === conversation.id) {
+      console.log('ℹ️ Conversación ya seleccionada, omitiendo carga');
+      return;
+    }
+
     try {
       console.log(`🔍 DIAGNÓSTICO: Cargando mensajes para conversación ${conversation.id}`);
       console.log(`👤 Usuario: ${conversation.user?.full_name}`);
       console.log(`📱 Plataforma: ${conversation.platform}`);
       console.log(`🔄 Es recuperada: ${conversation.isRecovered}`);
+      
+      // Establecer conversación seleccionada inmediatamente para prevenir múltiples cargas
+      setSelectedConversation(conversation);
       
       let messagesToShow: Message[] = [];
       
@@ -605,42 +627,69 @@ const ChatsPage: React.FC = () => {
         messagesToShow = conversationMessages[conversation.id] || [];
         console.log(`📨 Cargando ${messagesToShow.length} mensajes de conversación recuperada: ${conversation.user?.full_name}`);
       } else {
-        // Para conversaciones normales, cargar desde el servidor
+        // Para conversaciones normales, cargar desde el servidor con timeout
         console.log(`🌐 Solicitando mensajes al servidor para conversación ${conversation.id}...`);
-        const messagesData = await ws.getMessages(conversation.id);
-        messagesToShow = messagesData.messages || [];
-        console.log(`📨 Respuesta del servidor: ${messagesToShow.length} mensajes`);
         
-        // Mostrar detalles de los mensajes para diagnóstico
-        if (messagesToShow.length > 0) {
-          console.log(`📋 Últimos 3 mensajes:`, messagesToShow.slice(-3).map(msg => ({
-            id: msg.id,
-            content: msg.content.substring(0, 50) + '...',
-            role: msg.role,
-            created_at: msg.created_at
-          })));
-        } else {
-          console.log(`⚠️ No se obtuvieron mensajes del servidor`);
+        // Agregar timeout para evitar cuelgues
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout al cargar mensajes')), 10000)
+        );
+        
+        const messagesPromise = ws.getMessages(conversation.id);
+        
+        try {
+          const messagesData = await Promise.race([messagesPromise, timeoutPromise]) as any;
+          messagesToShow = messagesData?.messages || [];
+          console.log(`📨 Respuesta del servidor: ${messagesToShow.length} mensajes`);
+          
+          // Mostrar detalles de los mensajes para diagnóstico
+          if (messagesToShow.length > 0) {
+            console.log(`📋 Últimos 3 mensajes:`, messagesToShow.slice(-3).map(msg => ({
+              id: msg.id,
+              content: msg.content?.substring(0, 50) + '...' || 'Sin contenido',
+              role: msg.role,
+              created_at: msg.created_at
+            })));
+          } else {
+            console.log(`⚠️ No se obtuvieron mensajes del servidor`);
+          }
+        } catch (timeoutError) {
+          console.error('❌ Timeout o error al cargar mensajes:', timeoutError);
+          messagesToShow = [];
         }
       }
       
       // FUNCIONALIDAD 1: Ordenar mensajes cronológicamente (más antiguos primero, más recientes al final)
-      messagesToShow = messagesToShow.sort((a, b) => 
-        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      );
+      if (Array.isArray(messagesToShow)) {
+        messagesToShow = messagesToShow
+          .filter(msg => msg && msg.created_at) // Filtrar mensajes válidos
+          .sort((a, b) => 
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+      } else {
+        console.warn('⚠️ messagesToShow no es un array válido, inicializando como array vacío');
+        messagesToShow = [];
+      }
       
       console.log(`✅ Estableciendo ${messagesToShow.length} mensajes ordenados en el estado`);
       setMessages(messagesToShow);
-      setSelectedConversation(conversation);
       
       // FUNCIONALIDAD 2: Marcar conversación como leída en la base de datos
       if ((conversation.unreadCount || 0) > 0 && !conversation.isRecovered) {
         try {
           console.log(`👁️ Marcando conversación ${conversation.id} como leída en la base de datos...`);
-          await ws.markConversationAsRead(conversation.id);
+          
+          // Agregar timeout también para markConversationAsRead
+          const markAsReadPromise = ws.markConversationAsRead(conversation.id);
+          const markAsReadTimeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout al marcar como leída')), 5000)
+          );
+          
+          await Promise.race([markAsReadPromise, markAsReadTimeout]);
           console.log(`✅ Conversación marcada como leída exitosamente`);
-        } catch (error) {
-          console.error('❌ Error marcando conversación como leída:', error);
+        } catch (markError) {
+          console.error('❌ Error marcando conversación como leída:', markError);
+          // No fallar la carga completa por este error
         }
       }
       
@@ -654,7 +703,14 @@ const ChatsPage: React.FC = () => {
       }
       
     } catch (error) {
-      console.error('❌ Error cargando mensajes:', error);
+      console.error('❌ Error crítico cargando mensajes:', error);
+      
+      // En caso de error crítico, al menos establecer la conversación seleccionada
+      setSelectedConversation(conversation);
+      setMessages([]);
+      
+      // Mostrar mensaje de error al usuario (opcional)
+      // Podrías agregar un estado de error aquí si quieres mostrar un mensaje en la UI
     }
   };
 
